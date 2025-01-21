@@ -1,0 +1,138 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sun Motors - Car Search Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .message {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            padding: 1rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            background: #f9fafb;
+        }
+
+        .user-message {
+            align-items: flex-end;
+            background-color: #dbf4ff;
+        }
+
+        .assistant-message {
+            align-items: flex-start;
+            background-color: #ffffff;
+        }
+
+        .timestamp {
+            font-size: 0.75rem;
+            color: #6b7280;
+        }
+
+        #queryInput {
+            width: 100%;
+            height: 6rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 0.5rem;
+            font-size: 1rem;
+            resize: none;
+        }
+
+        #sendButton {
+            background-color: #2563eb;
+            color: #ffffff;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+
+        #chatContainer {
+            height: 60vh;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            background: #ffffff;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center">
+    <header class="bg-white shadow p-4 w-full text-center">
+        <h1 class="text-2xl font-bold">Sun Motors - Car Search Assistant</h1>
+    </header>
+
+    <main class="flex-1 p-6 max-w-4xl w-full">
+        <div id="chatContainer" class="space-y-4">
+            <!-- Messages will go here -->
+        </div>
+
+        <div class="mt-4 flex flex-col">
+            <textarea id="queryInput" placeholder="Type your query here..."></textarea>
+            <button id="sendButton" class="mt-2">Send</button>
+        </div>
+    </main>
+
+    <script>
+        const queryInput = document.getElementById('queryInput');
+        const sendButton = document.getElementById('sendButton');
+        const chatContainer = document.getElementById('chatContainer');
+
+        function addMessage(content, isUser) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.style.whiteSpace = 'pre-wrap';
+            contentDiv.textContent = content;
+
+            const timestampDiv = document.createElement('div');
+            timestampDiv.className = 'timestamp';
+            timestampDiv.textContent = new Date().toLocaleTimeString();
+
+            messageDiv.appendChild(contentDiv);
+            messageDiv.appendChild(timestampDiv);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const query = queryInput.value.trim();
+            if (!query) return;
+
+            addMessage(query, true);
+            queryInput.value = '';
+
+            try {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query }),
+                });
+
+                const data = await response.json();
+                if (data.error) {
+                    addMessage(`Error: ${data.error}`, false);
+                } else {
+                    addMessage(data.results, false);
+                }
+            } catch (error) {
+                addMessage('An error occurred. Please try again.', false);
+            }
+        }
+
+        sendButton.addEventListener('click', sendMessage);
+        queryInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
