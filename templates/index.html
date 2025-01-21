@@ -1,4 +1,3 @@
-<!-- templates/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,106 +6,191 @@
     <title>Sun Motors - Car Search Assistant</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .message {
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-            padding: 1rem;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.5rem;
-            background: #f9fafb;
-        }
-
-        .user-message {
-            align-items: flex-end;
-            background-color: #dbf4ff;
-        }
-
-        .assistant-message {
-            align-items: flex-start;
+        body {
             background-color: #ffffff;
         }
 
-        .timestamp {
-            font-size: 0.75rem;
-            color: #6b7280;
+        .chat-container {
+            height: calc(100vh - 180px);
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+
+        .message {
+            max-width: 850px;
+            margin: 0 auto;
+            padding: 1.5rem 1rem;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .user-message {
+            background-color: #ffffff;
+        }
+
+        .assistant-message {
+            background-color: #f9fafb;
+        }
+
+        .typing-animation::after {
+            content: '▋';
+            animation: blink 1s step-start infinite;
+        }
+
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        .input-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: #ffffff;
+            border-top: 1px solid #e5e7eb;
+            padding: 1rem;
+        }
+
+        .input-box {
+            max-width: 850px;
+            margin: 0 auto;
+            position: relative;
         }
 
         #queryInput {
             width: 100%;
-            height: 6rem;
             border: 1px solid #e5e7eb;
-            border-radius: 0.5rem;
-            padding: 0.5rem;
+            border-radius: 0.75rem;
+            padding: 0.75rem 3rem 0.75rem 1rem;
             font-size: 1rem;
             resize: none;
+            overflow: hidden;
+            min-height: 3rem;
+            max-height: 12rem;
+            line-height: 1.5;
+            background-color: #ffffff;
+        }
+
+        #queryInput:focus {
+            outline: none;
+            border-color: #2563eb;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
         }
 
         #sendButton {
-            background-color: #2563eb;
-            color: #ffffff;
-            padding: 0.5rem 1rem;
-            border: none;
+            position: absolute;
+            right: 0.5rem;
+            bottom: 0.5rem;
+            padding: 0.5rem;
+            color: #2563eb;
             border-radius: 0.5rem;
-            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             cursor: pointer;
         }
 
-        #chatContainer {
-            height: 60vh;
-            overflow-y: auto;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.5rem;
-            padding: 1rem;
-            background: #ffffff;
+        #sendButton:hover {
+            background-color: #f3f4f6;
+        }
+
+        .send-icon {
+            width: 1.25rem;
+            height: 1.25rem;
         }
     </style>
 </head>
-<body class="bg-gray-100 min-h-screen flex flex-col items-center">
-    <header class="bg-white shadow p-4 w-full text-center">
-        <h1 class="text-2xl font-bold">Sun Motors - Car Search Assistant</h1>
+<body>
+    <header class="border-b border-gray-200 bg-white py-3">
+        <div class="max-w-[850px] mx-auto px-4">
+            <h1 class="text-xl font-semibold text-gray-900">Sun Motors Assistant</h1>
+        </div>
     </header>
 
-    <main class="flex-1 p-6 max-w-4xl w-full">
-        <div id="chatContainer" class="space-y-4">
-            <!-- Messages will go here -->
+    <div id="chatContainer" class="chat-container px-4">
+        <div class="message assistant-message">
+            <div class="text-gray-800">
+                Hello! I'm your car search assistant. How can I help you find the perfect vehicle today?
+            </div>
         </div>
+    </div>
 
-        <div class="mt-4 flex flex-col">
-            <textarea id="queryInput" placeholder="Type your query here..."></textarea>
-            <button id="sendButton" class="mt-2">Send</button>
+    <div class="input-container">
+        <div class="input-box">
+            <textarea 
+                id="queryInput" 
+                placeholder="Ask me about finding your perfect car..." 
+                rows="1"
+            ></textarea>
+            <button id="sendButton" title="Send message">
+                <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9" stroke-linejoin="round" stroke-linecap="round"/>
+                </svg>
+            </button>
         </div>
-    </main>
+    </div>
 
     <script>
         const queryInput = document.getElementById('queryInput');
         const sendButton = document.getElementById('sendButton');
         const chatContainer = document.getElementById('chatContainer');
 
-        function addMessage(content, isUser) {
+        // Auto-resize textarea
+        function autoResize() {
+            queryInput.style.height = 'auto';
+            queryInput.style.height = (queryInput.scrollHeight) + 'px';
+        }
+
+        // Add user message
+        function addUserMessage(content) {
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
-            
-            const contentDiv = document.createElement('div');
-            contentDiv.style.whiteSpace = 'pre-wrap';
-            contentDiv.textContent = content;
-
-            const timestampDiv = document.createElement('div');
-            timestampDiv.className = 'timestamp';
-            timestampDiv.textContent = new Date().toLocaleTimeString();
-
-            messageDiv.appendChild(contentDiv);
-            messageDiv.appendChild(timestampDiv);
+            messageDiv.className = 'message user-message';
+            messageDiv.innerHTML = `
+                <div class="text-gray-800">
+                    ${content}
+                </div>
+            `;
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // Add assistant message
+        function addAssistantMessage(content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant-message';
+            
+            const textDiv = document.createElement('div');
+            textDiv.className = 'text-gray-800';
+            
+            // Add typing animation
+            let currentText = '';
+            const words = content.split(' ');
+            textDiv.classList.add('typing-animation');
+            
+            messageDiv.appendChild(textDiv);
+            chatContainer.appendChild(messageDiv);
+
+            // Simulate typing effect
+            function typeNextWord(index) {
+                if (index < words.length) {
+                    currentText += (index > 0 ? ' ' : '') + words[index];
+                    textDiv.textContent = currentText;
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                    setTimeout(() => typeNextWord(index + 1), 50);
+                } else {
+                    textDiv.classList.remove('typing-animation');
+                }
+            }
+
+            typeNextWord(0);
         }
 
         async function sendMessage() {
             const query = queryInput.value.trim();
             if (!query) return;
 
-            addMessage(query, true);
+            addUserMessage(query);
             queryInput.value = '';
+            autoResize();
 
             try {
                 const response = await fetch('/api/search', {
@@ -117,22 +201,29 @@
 
                 const data = await response.json();
                 if (data.error) {
-                    addMessage(`Error: ${data.error}`, false);
+                    addAssistantMessage(`Error: ${data.error}`);
                 } else {
-                    addMessage(data.results, false);
+                    addAssistantMessage(data.results);
                 }
             } catch (error) {
-                addMessage('An error occurred. Please try again.', false);
+                addAssistantMessage('An error occurred. Please try again.');
             }
         }
 
+        // Event listeners
+        queryInput.addEventListener('input', autoResize);
+        
         sendButton.addEventListener('click', sendMessage);
+        
         queryInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
+
+        // Initial resize
+        autoResize();
     </script>
 </body>
 </html>
