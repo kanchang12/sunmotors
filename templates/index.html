@@ -3,227 +3,398 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sun Motors - Car Search Assistant</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Sun Motors</title>
+
     <style>
         body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             background-color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
         }
 
-        .chat-container {
-            height: calc(100vh - 180px);
-            overflow-y: auto;
-            scroll-behavior: smooth;
+        .layout {
+            display: flex;
+            min-height: 100vh;
+            flex-grow: 1;
         }
 
-        .message {
-            max-width: 850px;
-            margin: 0 auto;
-            padding: 1.5rem 1rem;
-            border-bottom: 1px solid #e5e7eb;
-        }
-
-        .user-message {
+        .sidebar {
+            width: 220px;
+            padding: 16px;
+            border-right: 1px solid #e5e7eb;
             background-color: #ffffff;
-        }
-
-        .assistant-message {
-            background-color: #f9fafb;
-        }
-
-        .typing-animation::after {
-            content: '▋';
-            animation: blink 1s step-start infinite;
-        }
-
-        @keyframes blink {
-            50% { opacity: 0; }
-        }
-
-        .input-container {
+            flex-shrink: 0;
             position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background-color: #ffffff;
-            border-top: 1px solid #e5e7eb;
-            padding: 1rem;
+            height: 100%;
+            overflow-y: auto;
         }
 
-        .input-box {
-            max-width: 850px;
-            margin: 0 auto;
-            position: relative;
+        .logo {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 30px;
+            color: #111827;
         }
 
-        #queryInput {
-            width: 100%;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.75rem;
-            padding: 0.75rem 3rem 0.75rem 1rem;
-            font-size: 1rem;
-            resize: none;
-            overflow: hidden;
-            min-height: 3rem;
-            max-height: 12rem;
-            line-height: 1.5;
-            background-color: #ffffff;
-        }
-
-        #queryInput:focus {
-            outline: none;
-            border-color: #2563eb;
-            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
-        }
-
-        #sendButton {
-            position: absolute;
-            right: 0.5rem;
-            bottom: 0.5rem;
-            padding: 0.5rem;
-            color: #2563eb;
-            border-radius: 0.5rem;
+        .new-thread {
             display: flex;
             align-items: center;
-            justify-content: center;
+            gap: 10px;
+            padding: 10px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            background-color: transparent;
+            color: #374151;
             cursor: pointer;
         }
 
-        #sendButton:hover {
+        .nav-item {
+            display: block;
+            padding: 10px;
+            color: #374151;
+            text-decoration: none;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            transition: background-color 0.3s ease;
+        }
+
+        .nav-item:hover {
             background-color: #f3f4f6;
         }
 
-        .send-icon {
-            width: 1.25rem;
-            height: 1.25rem;
+        .main-content {
+            margin-left: 220px;
+            padding: 20px;
+            flex-grow: 1;
+            overflow-y: auto;
         }
+
+        .main-header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .car-icon-container {
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+
+        .car-icon {
+            width: 40px;
+            height: 40px;
+        }
+
+        .text-style {
+            font-size: 18px;
+            font-weight: bold;
+            color: #111827;
+        }
+
+/* For the chat history container */
+.chat-container {
+    margin: 20px auto;
+    min-height: 300px;
+    padding: 10px;
+    border: 4px solid #d1d5db; /* 1px border */
+    border-radius: 8px;
+    width: 100%; /* Make it take up 100% of the available space */
+    max-width: 800px; /* Set a maximum width for consistency */
+    background-color: #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    overflow-y: auto;
+    max-height: 400px;
+}
+
+        .message {
+            margin-bottom: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            max-width: 80%;
+        }
+
+        .user-message {
+            background-color: #2563eb;
+            color: white;
+            margin-left: auto;
+        }
+
+        .assistant-message {
+            background-color: #f3f4f6;
+            color: #111827;
+            margin-right: auto;
+        }
+
+        .message-content {
+            padding: 8px;
+            line-height: 1.5;
+        }
+
+        .search-container {
+            position: relative;
+            margin-bottom: 20px;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+.search-box {
+    width: 100%; /* Use full width for consistency */
+    max-width: 800px; /* Make sure it doesn't grow too wide */
+    padding: 12px;
+    border: 4px solid #d1d5db; /* 1px border */
+    border-radius: 8px;
+    font-size: 16px;
+    background: #ffffff;
+    margin: 0 auto; /* Center the input box */
+}
+        .send-btn {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            padding: 8px;
+        }
+
+        .send-btn svg {
+            width: 24px;
+            height: 24px;
+            color: #2563eb;
+        }
+
+        .suggestions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+            width: 90%;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .suggestion-card {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background-color: #ffffff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .suggestion-card:hover {
+            background-color: #f3f4f6;
+        }
+
+        .suggestion-icon {
+            width: 20px;
+            height: 20px;
+            color: #6b7280;
+        }
+
+        .suggestion-text {
+            font-size: 14px;
+            color: #111827;
+        }
+
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+
+            .chat-container, .search-container, .suggestions {
+                width: 95%;
+            }
+
+            .suggestions {
+                grid-template-columns: 1fr;
+            }
+        }
+
     </style>
 </head>
 <body>
-    <header class="border-b border-gray-200 bg-white py-3">
-        <div class="max-w-[850px] mx-auto px-4">
-            <h1 class="text-xl font-semibold text-gray-900">Sun Motors Assistant</h1>
-        </div>
-    </header>
 
-    <div id="chatContainer" class="chat-container px-4">
-        <div class="message assistant-message">
-            <div class="text-gray-800">
-                Hello! I'm your car search assistant. How can I help you find the perfect vehicle today?
+    <div class="layout">
+        <div class="sidebar">
+            <div class="logo">Sun Motors</div>
+            <button class="new-thread">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 5v14M5 12h14"/>
+                </svg>
+                New Thread
+            </button>
+            <a href="https://www.sunmotors.co.uk/" class="nav-item">Home</a>
+            <a href="https://www.youtube.com" class="nav-item">YouTube</a>
+            <a href="https://www.caranddriver.com" class="nav-item">Car & Driver</a>
+            <a href="https://www.autotrader.co.uk" class="nav-item">AutoTrader</a>
+        </div>
+
+        <div class="main-content">
+            <div class="main-header">
+                <div class="car-icon-container">
+                    <img src="https://img.icons8.com/ios/40/000000/car.png" alt="Car Icon" class="car-icon">
+                    <span class="text-style">Car AI Assistant</span>
+                </div>
+                <p class="text-style">What would you like to know about</p>
+                <p class="text-style">Available used cars</p>
+            </div>
+
+            <div class="chat-container" id="chatHistory"></div>
+
+            <div class="search-container">
+                <input type="text" class="search-box" id="search-input" placeholder="Ask Anything about cars, maintenance or driving...">
+                <button class="send-btn" id="send-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M2 12l18-8-6 18L12 16l8-6-18 6z"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="suggestions">
+                <div class="suggestion-card">
+                    <a href="https://www.tiktok.com" target="_blank">
+                        <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"/>
+                            <path d="M21 21l-4.35-4.35"/>
+                        </svg>
+                        <span class="suggestion-text">Latest car trends on TikTok</span>
+                    </a>
+                </div>
+                <div class="suggestion-card">
+                    <a href="https://www.youtube.com" target="_blank">
+                        <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect width="20" height="16" x="2" y="4" rx="2"/>
+                            <path d="m10 8 6 4-6 4V8Z"/>
+                        </svg>
+                        <span class="suggestion-text">Most popular car YouTubers</span>
+                    </a>
+                </div>
+                <div class="suggestion-card">
+                    <a href="https://www.sunmotors.co.uk/specials" target="_blank">
+                        <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                        </svg>
+                        <span class="suggestion-text">Explore Sun Motors Specials</span>
+                    </a>
+                </div>
+                <div class="suggestion-card">
+                    <a href="https://www.autotrader.co.uk/cars" target="_blank">
+                        <svg class="suggestion-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 21c4.5 0 8-3.5 8-8s-3.5-8-8-8"/>
+                        </svg>
+                        <span class="suggestion-text">Best road trip car options</span>
+                    </a>
+                </div>
             </div>
         </div>
     </div>
 
-    <div class="input-container">
-        <div class="input-box">
-            <textarea 
-                id="queryInput" 
-                placeholder="Ask me about finding your perfect car..." 
-                rows="1"
-            ></textarea>
-            <button id="sendButton" title="Send message">
-                <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9" stroke-linejoin="round" stroke-linecap="round"/>
-                </svg>
-            </button>
-        </div>
-    </div>
-
     <script>
-        const queryInput = document.getElementById('queryInput');
-        const sendButton = document.getElementById('sendButton');
-        const chatContainer = document.getElementById('chatContainer');
+        document.addEventListener('DOMContentLoaded', () => {
+            const queryInput = document.getElementById('search-input');
+            const sendButton = document.getElementById('send-btn');
+            const chatContainer = document.getElementById('chatHistory');
 
-        // Auto-resize textarea
-        function autoResize() {
-            queryInput.style.height = 'auto';
-            queryInput.style.height = (queryInput.scrollHeight) + 'px';
-        }
+            if (!queryInput || !sendButton || !chatContainer) {
+                console.error("One or more elements (queryInput, sendButton, chatContainer) not found.");
+                return;
+            }
 
-        // Add user message
-        function addUserMessage(content) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message user-message';
-            messageDiv.innerHTML = `
-                <div class="text-gray-800">
-                    ${content}
-                </div>
-            `;
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        // Add assistant message
-        function addAssistantMessage(content) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message assistant-message';
-            
-            const textDiv = document.createElement('div');
-            textDiv.className = 'text-gray-800';
-            
-            // Add typing animation
-            let currentText = '';
-            const words = content.split(' ');
-            textDiv.classList.add('typing-animation');
-            
-            messageDiv.appendChild(textDiv);
-            chatContainer.appendChild(messageDiv);
-
-            // Simulate typing effect
-            function typeNextWord(index) {
-                if (index < words.length) {
-                    currentText += (index > 0 ? ' ' : '') + words[index];
-                    textDiv.textContent = currentText;
-                    chatContainer.scrollTop = chatContainer.scrollHeight;
-                    setTimeout(() => typeNextWord(index + 1), 50);
+            function addMessage(message, isUserMessage = false) {
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('message');
+                if (isUserMessage) {
+                    messageDiv.classList.add('user-message');
+                    messageDiv.innerHTML =
+                        `<div class="message-content">
+                            <p>${message}</p>
+                        </div>`;
                 } else {
-                    textDiv.classList.remove('typing-animation');
+                    messageDiv.classList.add('assistant-message');
+                    messageDiv.innerHTML =
+                        `<div class="message-content">
+                            <p>${message}</p>
+                        </div>`;
+                }
+                chatContainer.appendChild(messageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+
+            async function sendMessage() {
+                const query = queryInput.value.trim();
+                if (!query) return;
+
+                addMessage(query, true);
+                queryInput.value = '';
+
+                const assistantMessageDiv = document.createElement('div');
+                assistantMessageDiv.classList.add('message', 'assistant-message');
+                assistantMessageDiv.innerHTML =
+                    `<div class="message-content">
+                        <p>Thinking...</p>
+                    </div>`;
+                chatContainer.appendChild(assistantMessageDiv);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+
+                try {
+                    const response = await fetch('/api/search', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ query })
+                    });
+
+                    if (!response.ok) {
+                        assistantMessageDiv.innerHTML =
+                            `<div class="message-content">
+                                <p>Error: ${response.status} - ${response.statusText}</p>
+                            </div>`;
+                        return;
+                    }
+
+                    const data = await response.json();
+
+                    if (data.error) {
+                        assistantMessageDiv.innerHTML =
+                            `<div class="message-content">
+                                <p>Error: ${data.error}</p>
+                            </div>`;
+                    } else {
+                        assistantMessageDiv.innerHTML =
+                            `<div class="message-content">
+                                <p>${data.results}</p>
+                            </div>`;
+                    }
+
+                } catch (error) {
+                    assistantMessageDiv.innerHTML =
+                        `<div class="message-content">
+                            <p>An error occurred. Please try again.</p>
+                        </div>`;
+                    console.error('Error:', error);
                 }
             }
 
-            typeNextWord(0);
-        }
-
-        async function sendMessage() {
-            const query = queryInput.value.trim();
-            if (!query) return;
-
-            addUserMessage(query);
-            queryInput.value = '';
-            autoResize();
-
-            try {
-                const response = await fetch('/api/search', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query }),
-                });
-
-                const data = await response.json();
-                if (data.error) {
-                    addAssistantMessage(`Error: ${data.error}`);
-                } else {
-                    addAssistantMessage(data.results);
+            sendButton.addEventListener('click', sendMessage);
+            queryInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
                 }
-            } catch (error) {
-                addAssistantMessage('An error occurred. Please try again.');
-            }
-        }
-
-        // Event listeners
-        queryInput.addEventListener('input', autoResize);
-        
-        sendButton.addEventListener('click', sendMessage);
-        
-        queryInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
+            });
         });
-
-        // Initial resize
-        autoResize();
     </script>
 </body>
 </html>
