@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from typing import List, Dict
-from openai import OpenAI
+import openai
 import json
 import os
 import requests
@@ -9,17 +9,18 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class CarSearchSystem:
     def __init__(self, data: List[Dict], openai_api_key: str):
         self.data = data
-        self.client = OpenAI(api_key=openai_api_key)
+        openai.api_key = openai_api_key
         self.available_cars = self._process_inventory()
-        
+
     def _process_inventory(self) -> str:
-        """Create a formatted string of all available cars with their details"""
+        """Create a formatted string of all available cars with their details."""
         inventory = []
         for car in self.data:
             v = car['vehicle']
@@ -33,55 +34,92 @@ class CarSearchSystem:
                 "---"
             )
             inventory.append(car_details)
-        
         return "\n".join(inventory)
-    
+
     def _create_system_prompt(self) -> str:
-        return f"""You are a friendly and professional car dealership assistant. Below is our current inventory of cars:
+        """Create a detailed system prompt for the conversational AI."""
+        return f"""
+You are a friendly and professional car dealership assistant. Below is our current inventory of cars:
 
 {self.available_cars}
 
-When the user asks for recommendations, respond in the following format:
+When the user asks for car recommendations, respond in the following structured and friendly format:
 
-1. Start by acknowledging their request with small talk, e.g., "Hi, thank you for your query!" or "You're in luck, we have some great options!"
-2. Recommend the cars using the format below:
-   - **Recommended Cars:**
-   - Ensure each car recommendation has two line breaks between them.
-   - Use the format:
-     ```
-     1. [Car Make & Model] - £[Price]
-        Key Features: [List relevant features for the query]
-        Why This Car: [Brief explanation]
+1. Greet the user warmly and acknowledge their query. For example:
+   - "Hi, thank you for your query! I'd love to help you find the perfect car."
+   - "You're in luck! We have some great options for you."
+   - "Thanks for reaching out! Let me show you what we have."
 
-     2. [Next car if applicable]
-        Key Features: ...
-        Why This Car: ...
-     ```
+2. Use the following format for recommendations:
 
-If no suitable cars match the user's needs, apologize politely, explain why, and suggest alternatives from our inventory.
+   **Recommended Cars:**
 
-ALWAYS ensure your response includes small talk, and format the recommendations with two line breaks. DO NOT skip this structure."""
+   1. [Car Make & Model] - £[Price]
+      Key Features: [Relevant features based on query]
+      Why This Car: [Brief explanation about the recommendation]
+
+   2. [Next car, if applicable]
+
+   Example:
+
+   Hi, thank you for your query! I'd love to help you find the perfect car. Based on what you're looking for:
+
+   **Recommended Cars:**
+
+   1. MINI HATCH - £11,495  
+      Key Features: Compact size, fuel-efficient, stylish design  
+      Why This Car: The MINI HATCH is perfect for young drivers looking for affordability and fun driving.
+
+   2. AUDI A4 - £16,995  
+      Key Features: Reliable, spacious, safe  
+      Why This Car: The AUDI A4 offers luxury, performance, and a comfortable interior.
+
+3. If no suitable cars match the user’s query:
+   - Apologize politely and explain why.
+   - Suggest alternatives or invite the user to refine their search.
+
+Always ensure responses are clear, friendly, and formatted with proper line breaks.
+"""
 
     def search(self, query_text: str) -> str:
+        """Handle user queries using OpenAI's GPT model."""
         try:
-            response = self.client.chat.completions.create(
+            response = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": self._create_system_prompt()},
                     {"role": "user", "content": query_text}
                 ],
                 temperature=0.7,
-                max_tokens=250
+                max_tokens=500
             )
-            
-            result = response.choices[0].message.content
-            return result
-    
+
+            # Capture the response and ensure formatting
+            raw_response = response.choices[0].message.content
+            return self._format_response(raw_response)
+
         except Exception as e:
-            return f"I apologize, but I couldn't process your query. Here are some used cars we have available that might interest you. Our inventory includes various models from compact city cars to spacious SUVs, with prices ranging from budget-friendly to premium options. Feel free to ask about specific requirements like budget, size, or fuel type."
+            logger.error(f"Error during search: {e}")
+            return (
+                "I'm sorry, I couldn't process your query at the moment. Here are some cars from our inventory you might like. "
+                "Feel free to ask me again with specific requirements!"
+            )
+
+    def _format_response(self, raw_response: str) -> str:
+        """Ensure proper formatting of AI responses with clear line breaks."""
+        lines = raw_response.split("\n")
+        formatted_lines = []
+        for line in lines:
+            # Add line breaks before numbered car recommendations
+            if line.strip().startswith("1.") or line.strip().startswith("2."):
+                formatted_lines.append("\n\n" + line.strip())
+            else:
+                formatted_lines.append(line.strip())
+        return "\n".join(formatted_lines)
+
 
 def fetch_api_data():
-    """Fetch car data from the Sun Motors API"""
+    """Fetch car data from the Sun Motors API."""
     url = "https://api.sunmotors.co.uk/marketcheck/vehicles"
     try:
         response = requests.get(url)
@@ -91,8 +129,9 @@ def fetch_api_data():
         logger.error(f"API request failed: {e}")
         return None
 
+
 def save_json_data(data):
-    """Save API response to JSON file with timestamp"""
+    """Save API response to a JSON file with a timestamp."""
     if data:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = "vehicles_data.json"
@@ -114,7 +153,9 @@ def save_json_data(data):
             return False
     return False
 
+
 def load_car_data():
+    """Load car data from a JSON file."""
     try:
         with open('vehicles_data.json', 'r') as f:
             return json.load(f)['data']  # Note: accessing the 'data' key
@@ -123,8 +164,9 @@ def load_car_data():
     except json.JSONDecodeError:
         return []
 
+
 def update_data(search_system):
-    """Fetch new data and update search system"""
+    """Fetch new data and update the search system."""
     logger.info("Starting data update...")
     new_data = fetch_api_data()
     if new_data and save_json_data(new_data):
@@ -133,6 +175,7 @@ def update_data(search_system):
         logger.info("Search system updated with new data")
     else:
         logger.error("Failed to update data")
+
 
 # Flask application
 app = Flask(__name__)
@@ -153,12 +196,16 @@ scheduler.add_job(
 scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 
+
 @app.route('/')
 def index():
+    """Render the homepage."""
     return render_template('index.html')
+
 
 @app.route('/api/search', methods=['POST'])
 def search():
+    """Handle search requests from the frontend."""
     try:
         data = request.get_json()
         query = data.get('query')
@@ -171,6 +218,7 @@ def search():
     
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
