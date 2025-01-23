@@ -56,19 +56,19 @@ Recommended Cars:
 If no suitable cars are found, explain why and suggest alternatives from our inventory."""
 
     def search(self, query_text: str) -> str:
-    try:
-        response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": self._create_system_prompt()},
-                {"role": "user", "content": query_text}
-            ],
-            temperature=0.7,
-            max_tokens=250
-        )
-        
-        result = response.choices[0].message.content
-        return result
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": self._create_system_prompt()},
+                    {"role": "user", "content": query_text}
+                ],
+                temperature=0.7,
+                max_tokens=250
+            )
+            
+            result = response.choices[0].message.content
+            return result
     
     except Exception as e:
         return f"I apologize, but I couldn't process your query. Here are some used cars we have available that might interest you. Our inventory includes various models from compact city cars to spacious SUVs, with prices ranging from budget-friendly to premium options. Feel free to ask about specific requirements like budget, size, or fuel type."
