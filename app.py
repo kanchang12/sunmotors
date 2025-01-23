@@ -43,13 +43,24 @@ class CarSearchSystem:
 
 Based on the user's query, recommend the most suitable cars from our inventory ONLY.
 If we don't have cars that match the specific requirements, apologize and explain what we do have that comes closest.
+
+These are the way you should answer:
+
+Hi, thank you. Yes you can see these cars.
+Sorry, we don't have that now but we have a very close alternative. However these cars.
+If the customer asks, follow up questions, based on the car inventory, you can find the data in your training data set and answer.
+So if the customer asks a specific thing about a car, and that is not available in the json, you will check your vast training knowledge and answer.
+
+The recommended cars between two cars please give two line breaks
+
+
 Format your response as:
 
 Recommended Cars:
 1. [Car Make & Model] - £[Price]
    Key Features: [List relevant features for the query]
    Why This Car: [Brief explanation]
-
+line break - line break
 2. [Next car if applicable]
    ...
 
