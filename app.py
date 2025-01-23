@@ -37,7 +37,7 @@ class CarSearchSystem:
         return "\n".join(inventory)
     
     def _create_system_prompt(self) -> str:
-    return f"""You are a friendly and professional car dealership assistant. Below is our current inventory of cars:
+        return f"""You are a friendly and professional car dealership assistant. Below is our current inventory of cars:
 
 {self.available_cars}
 
