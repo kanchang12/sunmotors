@@ -1,17 +1,16 @@
 from flask import Flask, render_template, request, jsonify
-from dataclasses import dataclass
 from typing import List, Dict
 from openai import OpenAI
 import json
 import os
+import requests
+import logging
+from datetime import datetime
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
 
-
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
-
-# Then initialize with the key
-search_system = CarSearchSystem(car_data, openai_api_key)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class CarSearchSystem:
     def __init__(self, data: List[Dict], openai_api_key: str):
@@ -56,43 +55,73 @@ Recommended Cars:
 
 If no suitable cars are found, explain why and suggest alternatives from our inventory."""
 
-def search(self, query_text: str) -> str:
+    def search(self, query_text: str) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": self._create_system_prompt()},
+                    {"role": "user", "content": query_text}
+                ],
+                temperature=0.7,
+                max_tokens=250
+            )
+            
+            result = response.choices[0].message.content
+            
+            # Check if the response contains a list of cars
+            if result.lower().startswith('recommended cars:'):
+                # Convert to table format
+                lines = result.split('\n')
+                table = "| Car | Price | Key Features |\n|-----|-------|---------------|\n"
+                for line in lines[1:]:
+                    if line.strip() and line.startswith(tuple('0123456789')):
+                        parts = line.split('-')
+                        car_info = parts[0].strip()
+                        price = parts[1].split('£')[1].split('Key')[0].strip()
+                        features = line.split('Key Features:')[1].split('Why This Car:')[0].strip()
+                        table += f"| {car_info} | £{price} | {features} |\n"
+                return table
+            
+            return result
+            
+        except Exception as e:
+            return f"Error processing query: {str(e)}"
+
+def fetch_api_data():
+    """Fetch car data from the Sun Motors API"""
+    url = "https://api.sunmotors.co.uk/marketcheck/vehicles"
     try:
-        response = self.client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": self._create_system_prompt()},
-                {"role": "user", "content": query_text}
-            ],
-            temperature=0.7,
-            max_tokens=250
-        )
-        
-        result = response.choices[0].message.content
-        
-        # Check if the response contains a list of cars
-        if result.lower().startswith('recommended cars:'):
-            # Convert to table format
-            lines = result.split('\n')
-            table = "| Car | Price | Key Features |\n|-----|-------|---------------|\n"
-            for line in lines[1:]:
-                if line.strip() and line.startswith(tuple('0123456789')):
-                    parts = line.split('-')
-                    car_info = parts[0].strip()
-                    price = parts[1].split('£')[1].split('Key')[0].strip()
-                    features = line.split('Key Features:')[1].split('Why This Car:')[0].strip()
-                    table += f"| {car_info} | £{price} | {features} |\n"
-            return table
-        
-        return result
-        
-    except Exception as e:
-        return f"Error processing query: {str(e)}"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"API request failed: {e}")
+        return None
 
-# Flask application
-app = Flask(__name__)
+def save_json_data(data):
+    """Save API response to JSON file with timestamp"""
+    if data:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = "vehicles_data.json"
+        
+        if os.path.exists(filename):
+            backup_filename = f"vehicles_data_backup_{timestamp}.json"
+            try:
+                os.rename(filename, backup_filename)
+            except Exception as e:
+                logger.error(f"Error creating backup: {e}")
+        
+        try:
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=4)
+            logger.info(f"Data saved successfully at {timestamp}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving data: {e}")
+            return False
+    return False
 
-# Load car data and initialize search system
 def load_car_data():
     try:
         with open('vehicles_data.json', 'r') as f:
@@ -102,10 +131,35 @@ def load_car_data():
     except json.JSONDecodeError:
         return []
 
-# Initialize the search system
+def update_data(search_system):
+    """Fetch new data and update search system"""
+    logger.info("Starting data update...")
+    new_data = fetch_api_data()
+    if new_data and save_json_data(new_data):
+        search_system.data = new_data['data']
+        search_system.available_cars = search_system._process_inventory()
+        logger.info("Search system updated with new data")
+    else:
+        logger.error("Failed to update data")
+
+# Flask application
+app = Flask(__name__)
+
+# Load car data and initialize search system
 car_data = load_car_data()
 openai_api_key = os.getenv("OPENAI_API_KEY") 
 search_system = CarSearchSystem(car_data, openai_api_key)
+
+# Setup scheduler
+scheduler = BackgroundScheduler()
+scheduler.add_job(
+    func=lambda: update_data(search_system),
+    trigger="interval",
+    minutes=60,
+    id='update_car_data'
+)
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown())
 
 @app.route('/')
 def index():
