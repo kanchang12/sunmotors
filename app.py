@@ -68,25 +68,10 @@ If no suitable cars are found, explain why and suggest alternatives from our inv
             )
             
             result = response.choices[0].message.content
-            
-            # Check if the response contains a list of cars
-            if result.lower().startswith('recommended cars:'):
-                # Convert to table format
-                lines = result.split('\n')
-                table = "| Car | Price | Key Features |\n|-----|-------|---------------|\n"
-                for line in lines[1:]:
-                    if line.strip() and line.startswith(tuple('0123456789')):
-                        parts = line.split('-')
-                        car_info = parts[0].strip()
-                        price = parts[1].split('£')[1].split('Key')[0].strip()
-                        features = line.split('Key Features:')[1].split('Why This Car:')[0].strip()
-                        table += f"| {car_info} | £{price} | {features} |\n"
-                return table
-            
             return result
             
-        except Exception as e:
-            return f"Error processing query: {str(e)}"
+    except Exception as e:
+        return f"I apologize, but I couldn't process your query. Here are some used cars we have available that might interest you. Our inventory includes various models from compact city cars to spacious SUVs, with prices ranging from budget-friendly to premium options. Feel free to ask about specific requirements like budget, size, or fuel type."
 
 def fetch_api_data():
     """Fetch car data from the Sun Motors API"""
