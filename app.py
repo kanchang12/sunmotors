@@ -5,6 +5,14 @@ from openai import OpenAI
 import json
 import os
 
+
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("OpenAI API key not found. Set OPENAI_API_KEY environment variable.")
+
+# Then initialize with the key
+search_system = CarSearchSystem(car_data, openai_api_key)
+
 class CarSearchSystem:
     def __init__(self, data: List[Dict], openai_api_key: str):
         self.data = data
