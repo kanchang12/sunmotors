@@ -84,7 +84,7 @@ Always ensure responses are clear, friendly, and formatted with proper line brea
     def search(self, query_text: str) -> str:
         """Handle user queries using OpenAI's GPT model."""
         try:
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": self._create_system_prompt()},
@@ -95,8 +95,8 @@ Always ensure responses are clear, friendly, and formatted with proper line brea
             )
 
             # Capture the response and ensure formatting
-            return response.choices[0].message.content
-
+            result = response.choices[0].message.content
+            
         except Exception as e:
             logger.error(f"Error during search: {e}")
             return (
