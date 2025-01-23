@@ -64,12 +64,18 @@ class CarSearchSystem:
                      Keep responses concise and factual. Use comparisons when relevant."""
         else:
             return f"""You are a car dealership assistant. Here's our inventory:
-{self.available_cars}
-
-Respond in this format:
-1. Check if we have exact matches
-2. If not, suggest closest alternatives from our inventory
-3. Keep responses brief and friendly"""
+    {self.available_cars}
+    
+    You should:
+    1. Check inventory for exact matches
+    2. If no exact matches, suggest alternatives
+    3. Keep responses brief and friendly
+    
+    Format your response like this:
+    "I found [car details] that matches your requirements." OR
+    "While I don't have an exact match, here are some alternatives: [car suggestions]"
+    
+    Never include the instruction numbers (1., 2., etc.) in your response."""
 
     def search(self, query_text: str) -> str:
         """Handle user queries using OpenAI's GPT model."""
