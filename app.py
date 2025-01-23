@@ -95,6 +95,34 @@ Always ensure responses are clear, friendly, and formatted with proper line brea
             )
 
             # Capture the response and ensure formatting
+            return response.choices[0].message.content
+
+        except Exception as e:
+            logger.error(f"Error during search: {e}")
+            return (
+                "Hi there! Thank you for reaching out. It sounds like you're looking for a great car—I’d love to help with that!\n\n"
+                "Unfortunately, I’m having a bit of trouble accessing the exact options for you right now. But don’t worry—we have a fantastic range of cars, "
+                "and I’m sure there’s something here that’s just right for you!\n\n"
+                "For instance, we have compact, fuel-efficient cars like the MINI HATCH and reliable sedans like the AUDI A4. "
+                "If you share a bit more about your budget or specific preferences, I’d be happy to refine the recommendations and help you further!"
+            )
+
+
+
+    def search(self, query_text: str) -> str:
+        """Handle user queries using OpenAI's GPT model."""
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": self._create_system_prompt()},
+                    {"role": "user", "content": query_text}
+                ],
+                temperature=0.7,
+                max_tokens=500
+            )
+
+            # Capture the response and ensure formatting
             raw_response = response.choices[0].message.content
             return self._format_response(raw_response)
 
