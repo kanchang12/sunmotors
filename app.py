@@ -70,8 +70,8 @@ If no suitable cars are found, explain why and suggest alternatives from our inv
             result = response.choices[0].message.content
             return result
     
-    except Exception as e:
-        return f"I apologize, but I couldn't process your query. Here are some used cars we have available that might interest you. Our inventory includes various models from compact city cars to spacious SUVs, with prices ranging from budget-friendly to premium options. Feel free to ask about specific requirements like budget, size, or fuel type."
+        except Exception as e:
+            return f"I apologize, but I couldn't process your query. Here are some used cars we have available that might interest you. Our inventory includes various models from compact city cars to spacious SUVs, with prices ranging from budget-friendly to premium options. Feel free to ask about specific requirements like budget, size, or fuel type."
 
 def fetch_api_data():
     """Fetch car data from the Sun Motors API"""
