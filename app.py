@@ -153,29 +153,6 @@ Feel free to share more details about your preferences, and I’d be happy to re
 
 
 
-    def search(self, query_text: str) -> str:
-        """Handle user queries using OpenAI's GPT model."""
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": self._create_system_prompt()},
-                    {"role": "user", "content": query_text}
-                ],
-                temperature=0.7,
-                max_tokens=500
-            )
-
-            # Capture the response and ensure formatting
-            raw_response = response.choices[0].message.content
-            return self._format_response(raw_response)
-
-        except Exception as e:
-            logger.error(f"Error during search: {e}")
-            return (
-                "I'm sorry, I couldn't process your query at the moment. Here are some cars from our inventory you might like. "
-                "Feel free to ask me again with specific requirements!"
-            )
 
     def _format_response(self, raw_response: str) -> str:
         """Ensure proper formatting of AI responses with clear line breaks."""
