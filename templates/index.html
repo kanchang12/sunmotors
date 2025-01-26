@@ -76,6 +76,14 @@
                                 <p>Error: ${data.error}</p>
                             </div>`;
                     } else {
+                        let message = "I found some information for you.<br>";
+                        
+                        assistantMessageDiv.innerHTML =
+                            `<div class="message-content">
+                                <p>${message.replace(/\. /g, '.<br>')}</p>
+                            </div>`;
+                    }
+                        /*
                         let carDetailsHTML = `
                             <p>I found cars that match your requirements. Here are the details:</p>
                             <div id="car-details-container" class="mt-6">
@@ -114,6 +122,8 @@
                                 <p>${carDetailsHTML}</p>
                             </div>`;
                     }
+                    */
+         
 
                 } catch (error) {
                     assistantMessageDiv.innerHTML =
