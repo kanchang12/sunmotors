@@ -193,7 +193,7 @@ scheduler = BackgroundScheduler()
 scheduler.add_job(
     func=lambda: update_data(search_system),
     trigger="interval",
-    minutes=60,
+    minutes=180,
     id='update_car_data'
 )
 scheduler.start()
