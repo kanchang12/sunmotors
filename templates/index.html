@@ -76,54 +76,28 @@
                                 <p>Error: ${data.error}</p>
                             </div>`;
                     } else {
-                        let message = "I found some information for you.<br>";
-                        
-                        assistantMessageDiv.innerHTML =
-                            `<div class="message-content">
-                                <p>${message.replace(/\. /g, '.<br>')}</p>
-                            </div>`;
+let carDetailsHTML = `
+    <p>I found cars that match your requirements. Here are the details:</p>
+`;
+
+const cars = data.results || [];
+cars.forEach(car => {
+    carDetailsHTML += `
+        <p>Car Name: ${car.name}</p>
+        <p>Price: ${car.price}</p>
+        <p>Year: ${car.year}</p>
+        <p>Mileage: ${car.mileage}</p>
+        <p>Color: ${car.color}</p>
+        <br>`; // Add a line break between each car's details
+});
+
+assistantMessageDiv.innerHTML = `
+    <div class="message-content">
+        <p>${carDetailsHTML}</p>
+    </div>
+`;
+
                     }
-                        /*
-                        let carDetailsHTML = `
-                            <p>I found cars that match your requirements. Here are the details:</p>
-                            <div id="car-details-container" class="mt-6">
-                                <table class="min-w-full table-auto">
-                                    <thead>
-                                        <tr class="bg-gray-100">
-                                            <th class="px-4 py-2 text-left">Car Name</th>
-                                            <th class="px-4 py-2 text-left">Price</th>
-                                            <th class="px-4 py-2 text-left">Year</th>
-                                            <th class="px-4 py-2 text-left">Mileage</th>
-                                            <th class="px-4 py-2 text-left">Color</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>`;
-
-                        // Assuming data.results contains the car details
-                        const cars = data.results || [];
-                        cars.forEach(car => {
-                            carDetailsHTML += `
-                                <tr>
-                                    <td class="border px-4 py-2">${car.name}</td>
-                                    <td class="border px-4 py-2">${car.price}</td>
-                                    <td class="border px-4 py-2">${car.year}</td>
-                                    <td class="border px-4 py-2">${car.mileage}</td>
-                                    <td class="border px-4 py-2">${car.color}</td>
-                                </tr>`;
-                        });
-
-                        carDetailsHTML += `
-                                    </tbody>
-                                </table>
-                            </div>`;
-
-                        assistantMessageDiv.innerHTML =
-                            `<div class="message-content">
-                                <p>${carDetailsHTML}</p>
-                            </div>`;
-                    }
-                    */
-         
 
                 } catch (error) {
                     assistantMessageDiv.innerHTML =
@@ -213,30 +187,12 @@
                 </div>
             </div>
 
-<!-- Chatbot Messages -->
-<div id="message-container" class="bg-white p-4 border rounded-lg shadow h-64 overflow-y-auto">
-    <!-- Dynamically Injected Messages will be here -->
-</div>
-
-<script>
-    // Function to display AI response messages with a line break after every sentence
-    function displayAIResponse(message) {
-        // Add a line break after every sentence by replacing '.' with '.<br>'
-        const formattedMessage = message.replace(/\. /g, '.<br>');
-        // Append the formatted message to the message container
-        const messageContainer = document.getElementById('message-container');
-        messageContainer.innerHTML += `
-            <div class="text-gray-800 mb-4">
-                ${formattedMessage}
+            <!-- Chatbot Messages -->
+            <div id="message-container" class="bg-white p-4 border rounded-lg shadow h-64 overflow-y-auto">
+                <!-- Messages will be dynamically injected here -->
             </div>
-        `;
-    }
-</script>
-
-
 
             <!-- Cards -->
-            <<!-- Cards -->
 <div class="grid grid-cols-2 gap-6 mt-8">
     <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
         <h3 class="text-lg font-semibold text-blue-600">Common car problems</h3>
