@@ -6,105 +6,120 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Car AI Assistant</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            const queryInput = document.getElementById('search-input');
-            const sendButton = document.getElementById('send-btn');
-            const chatContainer = document.getElementById('message-container');
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const queryInput = document.getElementById('search-input');
+        const sendButton = document.getElementById('send-btn');
+        const chatContainer = document.getElementById('message-container');
 
-            if (!queryInput || !sendButton || !chatContainer) {
-                console.error("One or more elements (queryInput, sendButton, chatContainer) not found.");
-                return;
+        if (!queryInput || !sendButton || !chatContainer) {
+            console.error("One or more elements (queryInput, sendButton, chatContainer) not found.");
+            return;
+        }
+
+        function addMessage(message, isUserMessage = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('p-4', 'mb-2', 'bg-gray-100', 'rounded-lg');
+            if (isUserMessage) {
+                messageDiv.classList.add('user-message');
+                messageDiv.innerHTML =
+                    `<div class="message-content">
+                        <p><strong>User:</strong> ${message}</p>
+                    </div>`;
+            } else {
+                messageDiv.classList.add('assistant-message');
+                messageDiv.innerHTML =
+                    `<div class="message-content">
+                        <p><strong>Car AI:</strong> ${message}</p>
+                    </div>`;
             }
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
 
-            function addMessage(message, isUserMessage = false) {
-                const messageDiv = document.createElement('div');
-                messageDiv.classList.add('p-4', 'mb-2', 'bg-gray-100', 'rounded-lg');
-                if (isUserMessage) {
-                    messageDiv.classList.add('user-message');
-                    messageDiv.innerHTML =
+        async function sendMessage() {
+            const query = queryInput.value.trim();
+            if (!query) return;
+
+            addMessage(query, true);
+            queryInput.value = '';
+
+            const assistantMessageDiv = document.createElement('div');
+            assistantMessageDiv.classList.add('p-4', 'mb-2', 'bg-gray-100', 'rounded-lg', 'assistant-message');
+            assistantMessageDiv.innerHTML =
+                `<div class="message-content">
+                    <p>Thinking...</p>
+                </div>`;
+            chatContainer.appendChild(assistantMessageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            try {
+                const response = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                if (!response.ok) {
+                    assistantMessageDiv.innerHTML =
                         `<div class="message-content">
-                            <p><strong>User:</strong> ${message}</p>
+                            <p>Error: ${response.status} - ${response.statusText}</p>
+                        </div>`;
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.error) {
+                    assistantMessageDiv.innerHTML =
+                        `<div class="message-content">
+                            <p>Error: ${data.error}</p>
                         </div>`;
                 } else {
-                    messageDiv.classList.add('assistant-message');
-                    messageDiv.innerHTML =
-                        `<div class="message-content">
-                            <p><strong>Car AI:</strong> ${message}</p>
-                        </div>`;
+                    try {
+                        // Assuming data.results contains text and not an object or array.
+                        const resultText = data.results || ''; 
+
+                        // Add line breaks for each sentence or line.
+                        let formattedText = resultText.split('. ').join('.<br>');  // Adds <br> after each sentence.
+
+                        assistantMessageDiv.innerHTML = `
+                            <div class="message-content">
+                                <p>${formattedText}</p>
+                            </div>
+                        `;
+                    } catch (error) {
+                        assistantMessageDiv.innerHTML = `
+                            <div class="message-content">
+                                <p>An error occurred. Please try again.</p>
+                            </div>
+                        `;
+                        console.error('Error:', error);
+                    }
                 }
-                chatContainer.appendChild(messageDiv);
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            }
 
-            async function sendMessage() {
-                const query = queryInput.value.trim();
-                if (!query) return;
-
-                addMessage(query, true);
-                queryInput.value = '';
-
-                const assistantMessageDiv = document.createElement('div');
-                assistantMessageDiv.classList.add('p-4', 'mb-2', 'bg-gray-100', 'rounded-lg', 'assistant-message');
-                assistantMessageDiv.innerHTML =
-                    `<div class="message-content">
-                        <p>Thinking...</p>
-                    </div>`;
                 chatContainer.appendChild(assistantMessageDiv);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
 
-                try {
-                    const response = await fetch('/api/search', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ query })
-                    });
-
-                    if (!response.ok) {
-                        assistantMessageDiv.innerHTML =
-                            `<div class="message-content">
-                                <p>Error: ${response.status} - ${response.statusText}</p>
-                            </div>`;
-                        return;
-                    }
-
-                    const data = await response.json();
-
-                    if (data.error) {
-                        assistantMessageDiv.innerHTML =
-                            `<div class="message-content">
-                                <p>Error: ${data.error}</p>
-                            </div>`;
-                    } else {
-const resultText = data.results || ''; // Get the result text from the API response
-try{
-    // Add line breaks between sentences or lines of text
-    let formattedText = resultText.replace(/\n/g, '<br>');  // Converts all newlines to <br> for line breaks
-
-    assistantMessageDiv.innerHTML = `
-        <div class="message-content">
-            <p>${formattedText}</p>
-        </div>
-    `;
-} catch (error) {
-    assistantMessageDiv.innerHTML = `
-        <div class="message-content">
-            <p>An error occurred. Please try again.</p>
-        </div>
-    `;
-    console.error('Error:', error);
-}
+            } catch (error) {
+                assistantMessageDiv.innerHTML =
+                    `<div class="message-content">
+                        <p>An error occurred. Please try again.</p>
+                    </div>`;
+                console.error('Error:', error);
             }
+        }
 
-            sendButton.addEventListener('click', sendMessage);
-            queryInput.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault();
-                    sendMessage();
-                }
-            });
+        sendButton.addEventListener('click', sendMessage);
+        queryInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
         });
-    </script>
+    });
+</script>
+
 </head>
 
 <body class="bg-gray-50 min-h-screen flex">
