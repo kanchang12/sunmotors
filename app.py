@@ -72,7 +72,7 @@ class CarSearchSystem:
     3. Keep responses brief and friendly
     
     Format your response like this:
-    "I found [car details] that matches your requirements." OR
+    "I found [car details] that matches your requirements. Please provide the following details of the car in the chat: The car name, availability, Price Condition and Location in a tabular format" OR
     "While I don't have an exact match, here are some alternatives: [car suggestions]"
     
     Never include the instruction numbers (1., 2., etc.) in your response."""
