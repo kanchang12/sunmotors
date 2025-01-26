@@ -76,36 +76,24 @@
                                 <p>Error: ${data.error}</p>
                             </div>`;
                     } else {
-let carDetailsHTML = `
-    <p>I found cars that match your requirements. Here are the details:</p>
-`;
+const resultText = data.results || ''; // Get the result text from the API response
 
-const cars = data.results || [];
-cars.forEach(car => {
-    carDetailsHTML += `
-        <p>Car Name: ${car.name}</p>
-        <p>Price: ${car.price}</p>
-        <p>Year: ${car.year}</p>
-        <p>Mileage: ${car.mileage}</p>
-        <p>Color: ${car.color}</p>
-        <br>`; // Add a line break between each car's details
-});
+    // Add line breaks between sentences or lines of text
+    let formattedText = resultText.replace(/\n/g, '<br>');  // Converts all newlines to <br> for line breaks
 
-assistantMessageDiv.innerHTML = `
-    <div class="message-content">
-        <p>${carDetailsHTML}</p>
-    </div>
-`;
-
-                    }
-
-                } catch (error) {
-                    assistantMessageDiv.innerHTML =
-                        `<div class="message-content">
-                            <p>An error occurred. Please try again.</p>
-                        </div>`;
-                    console.error('Error:', error);
-                }
+    assistantMessageDiv.innerHTML = `
+        <div class="message-content">
+            <p>${formattedText}</p>
+        </div>
+    `;
+} catch (error) {
+    assistantMessageDiv.innerHTML = `
+        <div class="message-content">
+            <p>An error occurred. Please try again.</p>
+        </div>
+    `;
+    console.error('Error:', error);
+}
             }
 
             sendButton.addEventListener('click', sendMessage);
