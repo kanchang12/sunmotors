@@ -67,15 +67,16 @@ class CarSearchSystem:
     {self.available_cars}
     
     You should:
-    1. Check inventory for exact matches
-    2. If no exact matches, suggest alternatives
-    3. Keep responses brief and friendly
+    1. Check inventory for exact matches based on the user's query.
+    2. Always return a positive response with the details of a car that matches the user's needs.
+    3. If no exact match is found, suggest the closest alternatives from the inventory.
+    4. Always format the response like this:
+       - "I found [car details] that matches your requirements. Please provide the following details of the car in the chat: The car name, availability, price, condition, and location in a tabular format."
+       - If you can't find the exact match, provide alternatives as suggestions, formatted in a similar way.
     
-    Format your response like this:
-    "I found [car details] that matches your requirements. Please provide the following details of the car in the chat: The car name, availability, Price Condition and Location in a tabular format" OR
-    "While I don't have an exact match, here are some alternatives: [car suggestions]"
-    
-    Never include the instruction numbers (1., 2., etc.) in your response."""
+    Never include the instruction numbers (1., 2., etc.) in your response. The goal is always to assist the customer in finding a car that suits their needs."""
+
+
 
     def search(self, query_text: str) -> str:
         """Handle user queries using OpenAI's GPT model."""
