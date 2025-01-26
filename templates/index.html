@@ -203,50 +203,26 @@
                 </div>
             </div>
 
-           <!-- Chatbot Messages -->
+<!-- Chatbot Messages -->
 <div id="message-container" class="bg-white p-4 border rounded-lg shadow h-64 overflow-y-auto">
     <!-- Dynamically Injected Messages will be here -->
 </div>
 
 <script>
-    function displayCarDetailsInTable(carData) {
-        let tableHTML = `
-            <table class="min-w-full border-collapse">
-                <thead>
-                    <tr class="bg-gray-100">
-                        <th class="border px-4 py-2">Car Name</th>
-                        <th class="border px-4 py-2">Availability</th>
-                        <th class="border px-4 py-2">Price</th>
-                        <th class="border px-4 py-2">Condition</th>
-                        <th class="border px-4 py-2">Location</th>
-                    </tr>
-                </thead>
-                <tbody>
+    // Function to display AI response messages with a line break after every sentence
+    function displayAIResponse(message) {
+        // Add a line break after every sentence by replacing '.' with '.<br>'
+        const formattedMessage = message.replace(/\. /g, '.<br>');
+        // Append the formatted message to the message container
+        const messageContainer = document.getElementById('message-container');
+        messageContainer.innerHTML += `
+            <div class="text-gray-800 mb-4">
+                ${formattedMessage}
+            </div>
         `;
-
-        carData.forEach(car => {
-            tableHTML += `
-                <tr>
-                    <td class="border px-4 py-2">${car.name}</td>
-                    <td class="border px-4 py-2">${car.availability}</td>
-                    <td class="border px-4 py-2">${car.price}</td>
-                    <td class="border px-4 py-2">${car.condition}</td>
-                    <td class="border px-4 py-2">${car.location}</td>
-                </tr>
-            `;
-        });
-
-        tableHTML += '</tbody></table>';
-
-        // Insert the table into the message container
-        document.getElementById('message-container').innerHTML = tableHTML;
     }
-
-    
-
-    // Display in table when results are returned (replace with actual data)
-    displayCarDetailsInTable(carData);
 </script>
+
 
 
             <!-- Cards -->
