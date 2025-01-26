@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -75,9 +76,42 @@
                                 <p>Error: ${data.error}</p>
                             </div>`;
                     } else {
+                        let carDetailsHTML = `
+                            <p>I found cars that match your requirements. Here are the details:</p>
+                            <div id="car-details-container" class="mt-6">
+                                <table class="min-w-full table-auto">
+                                    <thead>
+                                        <tr class="bg-gray-100">
+                                            <th class="px-4 py-2 text-left">Car Name</th>
+                                            <th class="px-4 py-2 text-left">Price</th>
+                                            <th class="px-4 py-2 text-left">Year</th>
+                                            <th class="px-4 py-2 text-left">Mileage</th>
+                                            <th class="px-4 py-2 text-left">Color</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>`;
+
+                        // Assuming data.results contains the car details
+                        const cars = data.results || [];
+                        cars.forEach(car => {
+                            carDetailsHTML += `
+                                <tr>
+                                    <td class="border px-4 py-2">${car.name}</td>
+                                    <td class="border px-4 py-2">${car.price}</td>
+                                    <td class="border px-4 py-2">${car.year}</td>
+                                    <td class="border px-4 py-2">${car.mileage}</td>
+                                    <td class="border px-4 py-2">${car.color}</td>
+                                </tr>`;
+                        });
+
+                        carDetailsHTML += `
+                                    </tbody>
+                                </table>
+                            </div>`;
+
                         assistantMessageDiv.innerHTML =
                             `<div class="message-content">
-                                <p>${data.results}</p>
+                                <p>${carDetailsHTML}</p>
                             </div>`;
                     }
 
@@ -100,6 +134,7 @@
         });
     </script>
 </head>
+
 <body class="bg-gray-50 min-h-screen flex">
 
     <!-- Sidebar -->
@@ -157,7 +192,7 @@
             <!-- Header -->
             <div class="flex items-center justify-between mb-8">
                 <h2 class="text-2xl font-bold text-gray-900">Car AI Assistant</h2>
-                            </div>
+            </div>
 
             <!-- Search -->
             <div class="mb-8">
@@ -203,4 +238,5 @@
         </div>
     </main>
 </body>
+
 </html>
