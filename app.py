@@ -1,227 +1,283 @@
-from flask import Flask, render_template, request, jsonify
-from typing import List, Dict
-import openai
-import json
 import os
 import requests
-import logging
-from datetime import datetime
-from apscheduler.schedulers.background import BackgroundScheduler
-import atexit
+import json
+from flask import Flask, request, jsonify
+from twilio.twiml.voice_response import VoiceResponse, Dial
+from datetime import datetime, timedelta
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-class CarSearchSystem:
-    def __init__(self, data: List[Dict], openai_api_key: str):
-        self.data = data
-        self.client = openai.OpenAI(api_key=openai_api_key)
-        self.available_cars = self._process_inventory()
-        self.chat_history = []
-        self.car_makes = self._get_unique_makes()  # Get list of car makes in inventory
-
-    def _process_inventory(self) -> str:
-        """Create a formatted string of all available cars with their details."""
-        inventory = []
-        for car in self.data:
-            v = car['vehicle']
-            car_details = (
-                f"Car ID: {car['uniqueId']}\n"
-                f"Make & Model: {v['heading']}\n"
-                f"Price: £{v['price']}\n"
-                f"Year: {v['vehicleRegistrationYear']}\n"
-                f"Mileage: {v['miles']} miles\n"
-                f"Color: {v['exteriorColor']}\n"
-                "---"
-            )
-            inventory.append(car_details)
-        return "\n".join(inventory)
-
-    def _get_unique_makes(self) -> List[str]:
-        """Extract unique car makes from inventory."""
-        makes = set()
-        for car in self.data:
-            make = car['vehicle']['heading'].split()[0]
-            makes.add(make.upper())
-        return list(makes)
-
-    def _is_general_car_query(self, query: str) -> bool:
-        """Check if the query is about general car knowledge rather than inventory."""
-        # Look for comparison words or general car topics
-        general_indicators = ['better', 'worse', 'vs', 'versus', 'compare', 'difference', 
-                            'reliable', 'safety', 'brand', 'manufacturer', 'opinion']
-        query_words = query.lower().split()
-        
-        # Check if query contains general indicators or multiple car makes
-        mentioned_makes = sum(1 for make in self.car_makes if make.lower() in query.lower())
-        return any(word in query_words for word in general_indicators) or mentioned_makes > 1
-
-    def _create_system_prompt(self, is_general: bool) -> str:
-        """Create appropriate system prompt based on query type."""
-        if is_general:
-            return """You are a knowledgeable car expert. Provide brief, accurate answers about car-related topics.
-                     Keep responses concise and factual. Use comparisons when relevant."""
-        else:
-            return f"""You are a car dealership assistant. Here's our inventory:
-    {self.available_cars}
-    
-    You should:
-    1. Check inventory for exact matches based on the user's query.
-    2. Always return a positive response with the details of a car that matches the user's needs.
-    3. If no exact match is found, suggest the closest alternatives from the inventory.
-    4. Always format the response like this:
-       - "I found [car details] that matches your requirements. Please find the details"
-       - If you can't find the exact match, provide alternatives as suggestions, formatted in a similar way.
-    
-    Never include the instruction numbers (1., 2., etc.) in your response. The goal is always to assist the customer in finding a car that suits their needs."""
-
-
-
-    def search(self, query_text: str) -> str:
-        """Handle user queries using OpenAI's GPT model."""
-        try:
-            # Add user's message to chat history
-            self.chat_history.append({"role": "user", "content": query_text})
-            if len(self.chat_history) > 4:
-                self.chat_history = self.chat_history[-4:]
-
-            # Determine if this is a general car query
-            is_general = self._is_general_car_query(query_text)
-            
-            messages = [
-                {"role": "system", "content": self._create_system_prompt(is_general)}
-            ] + self.chat_history
-
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=messages,
-                temperature=0.7,
-                max_tokens=500
-            )
-
-            result = response.choices[0].message.content
-            self.chat_history.append({"role": "assistant", "content": result})
-            
-            return result
-
-        except Exception as e:
-            logger.error(f"Error during search: {e}")
-            return "I apologize, but I'm having trouble processing your request. Could you please try again?"
-
-    def _format_response(self, raw_response: str) -> str:
-        """Ensure proper formatting of AI responses with clear line breaks."""
-        lines = raw_response.split("\n")
-        formatted_lines = []
-        for line in lines:
-            if line.strip().startswith("1.") or line.strip().startswith("2."):
-                formatted_lines.append("\n\n" + line.strip())
-            else:
-                formatted_lines.append(line.strip())
-        return "\n".join(formatted_lines)
-
-
-def fetch_api_data():
-    """Fetch car data from the Sun Motors API."""
-    url = "https://api.sunmotors.co.uk/marketcheck/vehicles"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
-    except requests.RequestException as e:
-        logger.error(f"API request failed: {e}")
-        return None
-
-
-def save_json_data(data):
-    """Save API response to a JSON file with a timestamp."""
-    if data:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = "vehicles_data.json"
-        
-        if os.path.exists(filename):
-            backup_filename = f"vehicles_data_backup_{timestamp}.json"
-            try:
-                os.rename(filename, backup_filename)
-            except Exception as e:
-                logger.error(f"Error creating backup: {e}")
-        
-        try:
-            with open(filename, 'w') as f:
-                json.dump(data, f, indent=4)
-            logger.info(f"Data saved successfully at {timestamp}")
-            return True
-        except Exception as e:
-            logger.error(f"Error saving data: {e}")
-            return False
-    return False
-
-
-def load_car_data():
-    """Load car data from a JSON file."""
-    try:
-        with open('vehicles_data.json', 'r') as f:
-            return json.load(f)['data']  # Note: accessing the 'data' key
-    except FileNotFoundError:
-        return []
-    except json.JSONDecodeError:
-        return []
-
-
-def update_data(search_system):
-    """Fetch new data and update the search system."""
-    logger.info("Starting data update...")
-    new_data = fetch_api_data()
-    if new_data and save_json_data(new_data):
-        search_system.data = new_data['data']
-        search_system.available_cars = search_system._process_inventory()
-        logger.info("Search system updated with new data")
-    else:
-        logger.error("Failed to update data")
-
-
-# Flask application
+# --- Flask App Initialization ---
 app = Flask(__name__)
 
-# Load car data and initialize search system
-car_data = load_car_data()
-openai_api_key = os.getenv("OPENAI_API_KEY") 
-search_system = CarSearchSystem(car_data, openai_api_key)
+# --- Configuration (Load from Environment Variables) ---
+# It is CRUCIAL to set these environment variables in your deployment environment (e.g., Koyeb).
+# For local development, you can use a .env file and `python-dotenv`.
+# Example environment variables (set these where you deploy):
+# XELION_BASE_URL=https://lvsl01.xelion.com/api/v1/wasteking
+# XELION_USER_ID=abi.housego@wasteking.co.uk
+# XELION_PASSWORD=Passw0rd#
+# XELION_API_KEY=NtYFnwKdrqbuXAd4N88txxnim2Nd6LnE
+# TWILIO_ACCOUNT_SID=AC...
+# TWILIO_AUTH_TOKEN=your_twilio_auth_token
+# TWILIO_PHONE_NUMBER=+447... # Your Twilio phone number
+# FINAL_DESTINATION_NUMBER=+447... # The number you want the call to ultimately reach
 
-# Setup scheduler
-scheduler = BackgroundScheduler()
-scheduler.add_job(
-    func=lambda: update_data(search_system),
-    trigger="interval",
-    minutes=180,
-    id='update_car_data'
-)
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown())
+XELION_BASE_URL = os.environ.get("XELION_BASE_URL")
+XELION_USER_ID = os.environ.get("XELION_USER_ID")
+XELION_PASSWORD = os.environ.get("XELION_PASSWORD")
+XELION_API_KEY = os.environ.get("XELION_API_KEY")
 
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
+FINAL_DESTINATION_NUMBER = os.environ.get("FINAL_DESTINATION_NUMBER")
 
-@app.route('/')
-def index():
-    """Render the homepage."""
-    return render_template('index.html')
+# --- Global variables for Xelion token and OIDs (Simple State Management) ---
+# These will hold the values for subsequent API calls within the same Flask process.
+# In a multi-worker production setup (like Gunicorn), these would need to be
+# stored in a shared, persistent store (e.g., Redis, database) if a single
+# worker doesn't handle all requests from a single user. For a single-user
+# scenario or for demonstration, global variables are acceptable.
+xelion_auth_token = None
+xelion_token_expiry = None # Stores when the token expires
+current_device_oid = None
+current_active_call_oid = None
 
+# --- API Endpoints to Perform Actions ---
 
-@app.route('/api/search', methods=['POST'])
-def search():
-    """Handle search requests from the frontend."""
+@app.route('/api/xelion/login', methods=['POST'])
+def xelion_login():
+    """
+    Logs into Xelion and retrieves an authentication token.
+    Stores the token and its expiry globally.
+    """
+    global xelion_auth_token, xelion_token_expiry
+
+    if not all([XELION_BASE_URL, XELION_USER_ID, XELION_PASSWORD, XELION_API_KEY]):
+        return jsonify({"error": "Server configuration error: Xelion credentials missing"}), 500
+
+    login_url = f"{XELION_BASE_URL}/me/login"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"xelion {XELION_API_KEY}"
+    }
+    payload = {
+        "userName": XELION_USER_ID,
+        "password": XELION_PASSWORD,
+    }
+
     try:
-        data = request.get_json()
-        query = data.get('query')
+        response = requests.post(login_url, headers=headers, json=payload)
+        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+        data = response.json()
         
-        if not query:
-            return jsonify({'error': 'No query provided'}), 400
-        
-        result = search_system.search(query)
-        return jsonify({'results': result})
+        token = data.get("authentication")
+        valid_until_str = data.get("validUntil")
+
+        if token and valid_until_str:
+            # Parse validUntil string to datetime object
+            # Example format: "2025-07-30T21:54:44.000Z"
+            xelion_token_expiry = datetime.fromisoformat(valid_until_str.replace('Z', '+00:00'))
+            xelion_auth_token = f"xelion {token}" # Store with "xelion " prefix
+            app.logger.info(f"Xelion login successful. Token expires: {xelion_token_expiry}")
+            return jsonify({"message": "Xelion login successful", "token": token, "valid_until": valid_until_str})
+        else:
+            app.logger.error("Xelion login successful but token/expiry missing in response.")
+            return jsonify({"error": "Authentication successful but token or expiry data missing from Xelion"}), 500
+    except requests.exceptions.RequestException as e:
+        error_details = str(e)
+        if e.response is not None:
+            error_details = e.response.text # Get detailed error from Xelion if available
+        app.logger.error(f"Xelion login failed: {error_details}")
+        return jsonify({"error": "Failed to login to Xelion", "details": error_details}), 500
+
+@app.route('/api/xelion/get_call_info', methods=['GET'])
+def get_xelion_call_info():
+    """
+    Retrieves the device OID for the configured user and the OID of the first active call
+    on that device. Stores them globally.
+    Requires an active Xelion token.
+    """
+    global current_device_oid, current_active_call_oid
+
+    if not xelion_auth_token or (xelion_token_expiry and datetime.now(xelion_token_expiry.tzinfo) > xelion_token_expiry):
+        app.logger.warning("Attempted to get Xelion info with missing/expired token.")
+        return jsonify({"error": "Xelion token is missing or expired. Please login first."}), 401
     
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    if not XELION_BASE_URL:
+        return jsonify({"error": "Server configuration error: XELION_BASE_URL not set"}), 500
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": xelion_auth_token
+    }
+    
+    device_oid = None
+    active_call_oid = None
+
+    try:
+        # 1. Get User Devices (using the /me/phones path as per your discovery)
+        app.logger.info("Fetching user devices from Xelion...")
+        devices_url = f"{XELION_BASE_URL}/me/phones"
+        response = requests.get(devices_url, headers=headers)
+        response.raise_for_status()
+        devices_data = response.json()
+        
+        devices = devices_data.get("data", [])
+        if devices:
+            device_oid = devices[0].get("object", {}).get("oid")
+            device_name = devices[0].get("object", {}).get("commonName", "Unknown Device")
+            app.logger.info(f"Identified Xelion Device: {device_name}, OID: {device_oid}")
+        else:
+            app.logger.warning("No devices found for the authenticated Xelion user.")
+            return jsonify({"error": "No Xelion devices found for the configured user."}), 404
+
+        # 2. Get Active Calls for the selected device
+        if device_oid:
+            app.logger.info(f"Fetching active calls for device OID: {device_oid}...")
+            calls_url = f"{XELION_BASE_URL}/phones/{device_oid}/calls" # Confirmed correct path
+            response = requests.get(calls_url, headers=headers)
+            response.raise_for_status()
+            calls_data = response.json()
+            
+            active_calls = calls_data.get("data", [])
+            if active_calls:
+                # Assuming the first active call is the one we want to transfer
+                active_call_oid = active_calls[0].get("object", {}).get("oid")
+                remote_address = active_calls[0].get("remoteAddress", "N/A")
+                app.logger.info(f"Identified Active Call OID: {active_call_oid}, Remote Address: {remote_address}")
+            else:
+                app.logger.info(f"No active calls found for device {device_oid}. Ensure a call is active.")
+        
+        current_device_oid = device_oid
+        current_active_call_oid = active_call_oid
+
+        return jsonify({
+            "message": "Call info retrieved.",
+            "device_oid": device_oid,
+            "active_call_oid": active_call_oid
+        })
+
+    except requests.exceptions.RequestException as e:
+        error_details = str(e)
+        if e.response is not None:
+            error_details = e.response.text
+        app.logger.error(f"Failed to retrieve Xelion info: {error_details}")
+        return jsonify({"error": "Failed to retrieve Xelion info", "details": error_details}), 500
+
+@app.route('/api/xelion/transfer_call', methods=['POST'])
+def transfer_xelion_call():
+    """
+    Initiates a call transfer on Xelion.
+    Requires an active Xelion token, and previously obtained device_oid and active_call_oid.
+    """
+    if not xelion_auth_token or (xelion_token_expiry and datetime.now(xelion_token_expiry.tzinfo) > xelion_token_expiry):
+        app.logger.warning("Attempted call transfer with missing/expired Xelion token.")
+        return jsonify({"error": "Xelion token is missing or expired. Please login first."}), 401
+
+    if not all([XELION_BASE_URL, TWILIO_PHONE_NUMBER, FINAL_DESTINATION_NUMBER]):
+        return jsonify({"error": "Server configuration error: Twilio or Xelion numbers missing"}), 500
+    
+    # Use globally stored OIDs, or get them from request if passed.
+    # For this minimal setup, we'll rely on global state from previous calls.
+    device_oid = current_device_oid
+    active_call_oid = current_active_call_oid
+
+    if not device_oid or not active_call_oid:
+        app.logger.error("Missing device_oid or active_call_oid for transfer. Run /api/xelion/get_call_info first.")
+        return jsonify({"error": "Device OID or Active Call OID not set. Please run /api/xelion/get_call_info first."}), 400
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": xelion_auth_token
+    }
+
+    try:
+        # Step 1: Initiate a new outbound call from Xelion to your Twilio number
+        app.logger.info(f"Xelion: Initiating new outbound call from device {device_oid} to Twilio number {TWILIO_PHONE_NUMBER}")
+        start_call_url = f"{XELION_BASE_URL}/phones/{device_oid}/call"
+        start_call_payload = {
+            "address": TWILIO_PHONE_NUMBER,
+            "callType": "outbound"
+        }
+        start_call_response = requests.post(start_call_url, headers=headers, json=start_call_payload)
+        start_call_response.raise_for_status()
+        new_call_data = start_call_response.json()
+        new_call_oid = new_call_data.get("object", {}).get("oid")
+        
+        if not new_call_oid:
+            app.logger.error("Xelion did not return a new call OID after initiating call to Twilio.")
+            return jsonify({"error": "Xelion did not return a new call OID after initiation"}), 500
+        
+        app.logger.info(f"Xelion: New call to Twilio initiated successfully. New Call OID: {new_call_oid}")
+
+        # Step 2: Transfer the original call with the newly initiated call
+        app.logger.info(f"Xelion: Attempting to transfer original call {active_call_oid} with new call {new_call_oid}")
+        transfer_url = f"{XELION_BASE_URL}/phones/{device_oid}/transferSelectedCalls"
+        transfer_payload = {
+            "callOids": [active_call_oid, new_call_oid]
+        }
+        transfer_response = requests.post(transfer_url, headers=headers, json=transfer_payload)
+        transfer_response.raise_for_status()
+
+        app.logger.info("Xelion: Call transfer process successfully initiated.")
+        return jsonify({"message": "Call transfer process initiated successfully."})
+
+    except requests.exceptions.RequestException as e:
+        error_details = str(e)
+        if e.response is not None:
+            error_details = e.response.text
+        app.logger.error(f"Xelion call transfer failed: {error_details}")
+        return jsonify({"error": "Failed to transfer call via Xelion", "details": error_details}), 500
+
+# --- Twilio Webhook Endpoint ---
+@app.route('/voice', methods=['POST'])
+def twilio_voice():
+    """
+    This endpoint is called by Twilio when your Twilio number receives a call.
+    It generates TwiML to forward the call to the FINAL_DESTINATION_NUMBER.
+    """
+    call_sid = request.form.get('CallSid', 'N/A')
+    from_number = request.form.get('From', 'N/A')
+    to_number = request.form.get('To', 'N/A')
+
+    app.logger.info(f"Twilio Webhook Received: Call SID={call_sid}, From={from_number}, To={to_number}")
+
+    if not FINAL_DESTINATION_NUMBER:
+        app.logger.error("Server configuration error: FINAL_DESTINATION_NUMBER is not set for Twilio webhook.")
+        response = VoiceResponse()
+        response.say("Call transfer failed due to missing configuration.")
+        return str(response), 200, {'Content-Type': 'text/xml'}
+
+    response = VoiceResponse()
+    response.dial(FINAL_DESTINATION_NUMBER)
+
+    app.logger.info(f"Twilio Webhook: Generated TwiML to dial {FINAL_DESTINATION_NUMBER}")
+    return str(response), 200, {'Content-Type': 'text/xml'}
+
+# --- Home Route (basic instructions) ---
+@app.route('/')
+def home():
+    return jsonify({
+        "message": "Welcome to the Xelion Call Forwarder!",
+        "instructions": [
+            "1. Send a POST request to /api/xelion/login to get your Xelion token.",
+            "2. Send a GET request to /api/xelion/get_call_info to get your device OID and active call OID (ensure a call is active on your Xelion device).",
+            "3. Send a POST request to /api/xelion/transfer_call to initiate the transfer.",
+            "4. Configure your Twilio number's voice webhook to POST to your_app_url/voice."
+        ]
+    })
 
 
+# --- Run the Flask App ---
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    # For local development, load environment variables from a .env file
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        app.logger.info("Loaded environment variables from .env file (if it exists).")
+    except ImportError:
+        app.logger.warning("python-dotenv not installed. Environment variables must be set manually for local development.")
+
+    # Get port from environment, default to 5000
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=True) # debug=True for local dev, False for production
