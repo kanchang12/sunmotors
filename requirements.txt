@@ -1,5 +1,5 @@
 Flask
-openai
-Werkzeug
-apscheduler
 requests
+twilio
+gunicorn
+python-dotenv
