@@ -30,7 +30,7 @@ XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1
 XELION_USERNAME = os.getenv('XELION_USERNAME', 'your_xelion_username')
 XELION_PASSWORD = os.getenv('XELION_PASSWORD', 'your_xelion_password')
 XELION_APP_KEY = os.getenv('XELION_APP_KEY', 'your_xelion_app_key')
-XELION_USERSPACE = os.getenv('XELION_USERSPACE', 'your_xelion_userspace') # NEW: User Space as ENV variable
+# Removed XELION_USERSPACE as per user's request
 
 # Deepgram API
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
@@ -124,17 +124,14 @@ def xelion_login():
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
         
-        # Use XELION_USERSPACE from environment variable
-        userspace = XELION_USERSPACE 
-
+        # Removed userSpace from the payload as per user's request
         data_payload = { 
             "userName": XELION_USERNAME, 
             "password": XELION_PASSWORD,
-            "userSpace": userspace,     
             "appKey": XELION_APP_KEY
         }
         
-        print(f"🔐 Attempting Xelion login for {XELION_USERNAME} with userspace: {userspace}")
+        print(f"🔐 Attempting Xelion login for {XELION_USERNAME}")
         try:
             response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload))
             response.raise_for_status() 
