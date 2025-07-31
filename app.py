@@ -1,283 +1,803 @@
 import os
 import requests
 import json
-from flask import Flask, request, jsonify
-from twilio.twiml.voice_response import VoiceResponse, Dial
+import csv
+import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta
+from flask import Flask, render_template, jsonify
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Tuple
 
-# --- Flask App Initialization ---
+# Attempt Deepgram SDK import
+try:
+    from deepgram import DeepgramClient, PrerecordedOptions, FileSource
+    DEEPGRAM_SDK_AVAILABLE = True
+except ImportError:
+    DEEPGRAM_SDK_AVAILABLE = False
+
+# Attempt OpenAI import
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
 app = Flask(__name__)
 
-# --- Configuration (Load from Environment Variables) ---
-# It is CRUCIAL to set these environment variables in your deployment environment (e.g., Koyeb).
-# For local development, you can use a .env file and `python-dotenv`.
-# Example environment variables (set these where you deploy):
-# XELION_BASE_URL=https://lvsl01.xelion.com/api/v1/wasteking
-# XELION_USER_ID=abi.housego@wasteking.co.uk
-# XELION_PASSWORD=Passw0rd#
-# XELION_API_KEY=NtYFnwKdrqbuXAd4N88txxnim2Nd6LnE
-# TWILIO_ACCOUNT_SID=AC...
-# TWILIO_AUTH_TOKEN=your_twilio_auth_token
-# TWILIO_PHONE_NUMBER=+447... # Your Twilio phone number
-# FINAL_DESTINATION_NUMBER=+447... # The number you want the call to ultimately reach
+# --- Configuration ---
+# Xelion API (Replace with your actual Xelion details)
+XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1/wasteking')
+XELION_USERNAME = os.getenv('XELION_USERNAME', 'your_xelion_username')
+XELION_PASSWORD = os.getenv('XELION_PASSWORD', 'your_xelion_password')
+XELION_APP_KEY = os.getenv('XELION_APP_KEY', 'your_xelion_app_key')
 
-XELION_BASE_URL = os.environ.get("XELION_BASE_URL")
-XELION_USER_ID = os.environ.get("XELION_USER_ID")
-XELION_PASSWORD = os.environ.get("XELION_PASSWORD")
-XELION_API_KEY = os.environ.get("XELION_API_KEY")
+# Deepgram API
+DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
 
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
-FINAL_DESTINATION_NUMBER = os.environ.get("FINAL_DESTINATION_NUMBER")
+# OpenAI API (Replace with your actual OpenAI API Key)
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 
-# --- Global variables for Xelion token and OIDs (Simple State Management) ---
-# These will hold the values for subsequent API calls within the same Flask process.
-# In a multi-worker production setup (like Gunicorn), these would need to be
-# stored in a shared, persistent store (e.g., Redis, database) if a single
-# worker doesn't handle all requests from a single user. For a single-user
-# scenario or for demonstration, global variables are acceptable.
-xelion_auth_token = None
-xelion_token_expiry = None # Stores when the token expires
-current_device_oid = None
-current_active_call_oid = None
+# Database configuration
+DATABASE_FILE = 'calls.db'
 
-# --- API Endpoints to Perform Actions ---
+# Directory for temporary audio files
+AUDIO_TEMP_DIR = 'temp_audio'
+os.makedirs(AUDIO_TEMP_DIR, exist_ok=True)
 
-@app.route('/api/xelion/login', methods=['POST'])
+# Deepgram pricing and currency conversion
+DEEPGRAM_PRICE_PER_MINUTE = 0.0043  # $0.0043 per minute for Nova-2 model
+USD_TO_GBP_RATE = 0.79
+
+# Global session and locks for thread safety
+xelion_session = requests.Session()
+session_token = None
+login_lock = threading.Lock()
+db_lock = threading.Lock()
+transcription_lock = threading.Lock()
+
+# --- Database Initialization ---
+def init_db():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS calls (
+            oid TEXT PRIMARY KEY,
+            call_datetime TEXT,
+            agent_name TEXT,
+            phone_number TEXT,
+            call_direction TEXT,
+            duration_seconds REAL,
+            status TEXT,
+            user_id TEXT,
+            transcription_text TEXT,
+            transcribed_duration_minutes REAL,
+            deepgram_cost_usd REAL,
+            deepgram_cost_gbp REAL,
+            word_count INTEGER,
+            confidence REAL,
+            language TEXT,
+            openai_engagement REAL,
+            openai_politeness REAL,
+            openai_professionalism REAL,
+            openai_resolution REAL,
+            openai_overall_score REAL,
+            category TEXT,
+            engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
+            politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
+            professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
+            resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
+            processed_at TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# --- Xelion API Functions ---
 def xelion_login():
-    """
-    Logs into Xelion and retrieves an authentication token.
-    Stores the token and its expiry globally.
-    """
-    global xelion_auth_token, xelion_token_expiry
+    global session_token
+    with login_lock:
+        if session_token:
+            # Check if token is still valid (simplified - in real app, might validate or refresh)
+            print("🔐 Xelion token already exists. Reusing.")
+            return True
 
-    if not all([XELION_BASE_URL, XELION_USER_ID, XELION_PASSWORD, XELION_API_KEY]):
-        return jsonify({"error": "Server configuration error: Xelion credentials missing"}), 500
-
-    login_url = f"{XELION_BASE_URL}/me/login"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"xelion {XELION_API_KEY}"
-    }
-    payload = {
-        "userName": XELION_USER_ID,
-        "password": XELION_PASSWORD,
-    }
-
-    try:
-        response = requests.post(login_url, headers=headers, json=payload)
-        response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
-        data = response.json()
+        login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
+        headers = {"Content-Type": "application/json"}
         
-        token = data.get("authentication")
-        valid_until_str = data.get("validUntil")
+        # Determine userspace - simplified for this example
+        userspace = f"transcriber-{XELION_USERNAME.split('@')[0].replace('.', '-')}"
 
-        if token and valid_until_str:
-            # Parse validUntil string to datetime object
-            # Example format: "2025-07-30T21:54:44.000Z"
-            xelion_token_expiry = datetime.fromisoformat(valid_until_str.replace('Z', '+00:00'))
-            xelion_auth_token = f"xelion {token}" # Store with "xelion " prefix
-            app.logger.info(f"Xelion login successful. Token expires: {xelion_token_expiry}")
-            return jsonify({"message": "Xelion login successful", "token": token, "valid_until": valid_until_str})
-        else:
-            app.logger.error("Xelion login successful but token/expiry missing in response.")
-            return jsonify({"error": "Authentication successful but token or expiry data missing from Xelion"}), 500
-    except requests.exceptions.RequestException as e:
-        error_details = str(e)
-        if e.response is not None:
-            error_details = e.response.text # Get detailed error from Xelion if available
-        app.logger.error(f"Xelion login failed: {error_details}")
-        return jsonify({"error": "Failed to login to Xelion", "details": error_details}), 500
-
-@app.route('/api/xelion/get_call_info', methods=['GET'])
-def get_xelion_call_info():
-    """
-    Retrieves the device OID for the configured user and the OID of the first active call
-    on that device. Stores them globally.
-    Requires an active Xelion token.
-    """
-    global current_device_oid, current_active_call_oid
-
-    if not xelion_auth_token or (xelion_token_expiry and datetime.now(xelion_token_expiry.tzinfo) > xelion_token_expiry):
-        app.logger.warning("Attempted to get Xelion info with missing/expired token.")
-        return jsonify({"error": "Xelion token is missing or expired. Please login first."}), 401
-    
-    if not XELION_BASE_URL:
-        return jsonify({"error": "Server configuration error: XELION_BASE_URL not set"}), 500
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": xelion_auth_token
-    }
-    
-    device_oid = None
-    active_call_oid = None
-
-    try:
-        # 1. Get User Devices (using the /me/phones path as per your discovery)
-        app.logger.info("Fetching user devices from Xelion...")
-        devices_url = f"{XELION_BASE_URL}/me/phones"
-        response = requests.get(devices_url, headers=headers)
-        response.raise_for_status()
-        devices_data = response.json()
+        data_payload = { 
+            "userName": XELION_USERNAME, 
+            "password": XELION_PASSWORD,
+            "userSpace": userspace,     
+            "appKey": XELION_APP_KEY
+        }
         
-        devices = devices_data.get("data", [])
-        if devices:
-            device_oid = devices[0].get("object", {}).get("oid")
-            device_name = devices[0].get("object", {}).get("commonName", "Unknown Device")
-            app.logger.info(f"Identified Xelion Device: {device_name}, OID: {device_oid}")
-        else:
-            app.logger.warning("No devices found for the authenticated Xelion user.")
-            return jsonify({"error": "No Xelion devices found for the configured user."}), 404
-
-        # 2. Get Active Calls for the selected device
-        if device_oid:
-            app.logger.info(f"Fetching active calls for device OID: {device_oid}...")
-            calls_url = f"{XELION_BASE_URL}/phones/{device_oid}/calls" # Confirmed correct path
-            response = requests.get(calls_url, headers=headers)
-            response.raise_for_status()
-            calls_data = response.json()
+        print(f"🔐 Attempting Xelion login for {XELION_USERNAME}")
+        try:
+            response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload))
+            response.raise_for_status() 
             
-            active_calls = calls_data.get("data", [])
-            if active_calls:
-                # Assuming the first active call is the one we want to transfer
-                active_call_oid = active_calls[0].get("object", {}).get("oid")
-                remote_address = active_calls[0].get("remoteAddress", "N/A")
-                app.logger.info(f"Identified Active Call OID: {active_call_oid}, Remote Address: {remote_address}")
-            else:
-                app.logger.info(f"No active calls found for device {device_oid}. Ensure a call is active.")
+            login_response = response.json()
+            session_token = login_response.get("authentication")
+            xelion_session.headers.update({"Authorization": f"xelion {session_token}"})
+            print(f"✅ Successfully logged in to Xelion (Valid until: {login_response.get('validUntil', 'N/A')})")
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Failed to log in to Xelion: {e}")
+            session_token = None
+            return False
+
+def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Optional[str] = None) -> Tuple[List[Dict], Optional[str]]:
+    """Fetches a single page of communications with metadata."""
+    params = {'limit': limit}
+    params['until'] = until_date.strftime('%Y-%m-%d %H:%M:%S') 
+    if before_oid:
+        params['before'] = before_oid
+
+    communications_url = f"{XELION_BASE_URL.rstrip('/')}/communications"
+    try:
+        response = xelion_session.get(communications_url, params=params, timeout=30) 
+        response.raise_for_status()
         
-        current_device_oid = device_oid
-        current_active_call_oid = active_call_oid
+        data = response.json()
+        communications = data.get('data', [])
+        
+        next_before_oid = None
+        if 'meta' in data and 'paging' in data['meta']:
+            next_before_oid = data['meta']['paging'].get('previousId')
+        
+        return communications, next_before_oid
+            
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to fetch communications: {e}")
+        # If token expires, try to re-login
+        if "401 Unauthorized" in str(e) and xelion_login():
+            print("Attempting re-login and re-fetch...")
+            try:
+                response = xelion_session.get(communications_url, params=params, timeout=30) 
+                response.raise_for_status()
+                data = response.json()
+                communications = data.get('data', [])
+                next_before_oid = None
+                if 'meta' in data and 'paging' in data['meta']:
+                    next_before_oid = data['meta']['paging'].get('previousId')
+                return communications, next_before_oid
+            except requests.exceptions.RequestException as re:
+                print(f"❌ Re-fetch after re-login failed: {re}")
+                return [], None
+        return [], None
+
+def _extract_agent_info(comm_obj: Dict) -> Dict:
+    """Extract agent info from Xelion communication object using REAL field names."""
+    agent_info = {
+        'agent_name': 'Unknown',
+        'call_direction': 'Unknown',
+        'phone_number': 'Unknown',
+        'duration_seconds': 0,
+        'status': 'Unknown',
+        'user_id': 'Unknown'
+    }
+    
+    try:
+        common_name = comm_obj.get('commonName', '')
+        if common_name and '<-' in common_name:
+            parts = common_name.split('<-')
+            if len(parts) >= 2:
+                agent_info['agent_name'] = parts[0].strip()
+                phone_part = parts[1].split(',')[0].strip()
+                agent_info['phone_number'] = phone_part
+        
+        incoming = comm_obj.get('incoming')
+        if incoming is True:
+            agent_info['call_direction'] = 'Incoming'
+        elif incoming is False:
+            agent_info['call_direction'] = 'Outgoing'
+        
+        duration_sec = comm_obj.get('durationSec')
+        if duration_sec is not None:
+            agent_info['duration_seconds'] = int(duration_sec)
+        
+        agent_info['status'] = comm_obj.get('status', 'Unknown')
+        agent_info['user_id'] = comm_obj.get('id', 'Unknown')
+        
+        transferred_from = comm_obj.get('transferredFromName', '')
+        transferred_to = comm_obj.get('transferredToName', '')
+        if transferred_from:
+            agent_info['agent_name'] += f" (from: {transferred_from})"
+        if transferred_to:
+            agent_info['agent_name'] += f" (to: {transferred_to})"
+            
+    except Exception as e:
+        print(f"⚠️ Error extracting agent info for OID {comm_obj.get('oid', 'Unknown')}: {e}")
+    
+    return agent_info
+
+def download_audio(communication_oid: str) -> Optional[str]:
+    """Download audio file to a temporary location."""
+    audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
+    file_name = f"{communication_oid}.mp3"
+    file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
+
+    if os.path.exists(file_path):
+        print(f"📁 Audio for OID {communication_oid} already exists. Skipping download.")
+        return file_path
+    
+    try:
+        response = xelion_session.get(audio_url, timeout=60) 
+        if response.status_code == 200:
+            with open(file_path, 'wb') as f:
+                f.write(response.content)
+            print(f"⬇️ Downloaded audio for OID {communication_oid}")
+            return file_path
+        elif response.status_code == 404:
+            print(f"❌ No audio found for OID {communication_oid}")
+            return None
+        else:
+            print(f"❌ Failed to download audio for {communication_oid}: {response.status_code}")
+            return None
+            
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Audio download failed for {communication_oid}: {e}")
+        return None
+
+# --- Deepgram Transcription ---
+def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
+    """Transcribe audio file using Deepgram (tries SDK first, falls back to direct API)."""
+    if not DEEPGRAM_API_KEY:
+        print("❌ Deepgram API key not configured.")
+        return None
+
+    oid = metadata_row['oid']
+    
+    if not os.path.exists(audio_file_path):
+        print(f"❌ Audio file not found for transcription: {audio_file_path}")
+        return None
+    
+    try:
+        if DEEPGRAM_SDK_AVAILABLE:
+            try:
+                deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
+                options = PrerecordedOptions(
+                    model="nova-2", smart_format=True, punctuate=True,
+                    diarize=True, utterances=True, language="en-GB"
+                )
+                with open(audio_file_path, 'rb') as audio_file:
+                    payload = FileSource(audio_file.read())
+                response = deepgram_client.listen.prerecorded.v("1").transcribe_file(payload, options)
+                
+                transcript_data = response['results']['channels'][0]['alternatives'][0]
+                transcript_text = transcript_data['transcript']
+                duration_seconds = response['metadata']['duration']
+                confidence = transcript_data.get('confidence', 0)
+                language = response['metadata'].get('detected_language', 'en')
+
+                print(f"✅ Deepgram SDK transcribed OID {oid}")
+                
+            except Exception as e:
+                print(f"⚠️ Deepgram SDK failed for OID {oid}, trying direct API: {e}")
+                # Fallback to direct API
+                url = "https://api.deepgram.com/v1/listen"
+                headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
+                params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
+                          "diarize": "true", "utterances": "true", "language": "en-GB"}
+                
+                with open(audio_file_path, 'rb') as audio_file:
+                    response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
+                
+                response.raise_for_status()
+                result = response.json()
+                
+                if 'results' not in result or not result['results']['channels']:
+                    print(f"❌ No transcription results from direct API for OID {oid}")
+                    return None
+                
+                transcript_data = result['results']['channels'][0]['alternatives'][0]
+                transcript_text = transcript_data['transcript']
+                duration_seconds = result['metadata']['duration']
+                confidence = transcript_data.get('confidence', 0)
+                language = result['metadata'].get('detected_language', 'en')
+                print(f"✅ Deepgram Direct API transcribed OID {oid}")
+
+        else: # Only direct API available
+            url = "https://api.deepgram.com/v1/listen"
+            headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
+            params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
+                      "diarize": "true", "utterances": "true", "language": "en-GB"}
+            
+            with open(audio_file_path, 'rb') as audio_file:
+                response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            if 'results' not in result or not result['results']['channels']:
+                print(f"❌ No transcription results from direct API for OID {oid}")
+                return None
+            
+            transcript_data = result['results']['channels'][0]['alternatives'][0]
+            transcript_text = transcript_data['transcript']
+            duration_seconds = result['metadata']['duration']
+            confidence = transcript_data.get('confidence', 0)
+            language = result['metadata'].get('detected_language', 'en')
+            print(f"✅ Deepgram Direct API transcribed OID {oid}")
+
+        if not transcript_text.strip():
+            print(f"⚠️ Empty transcription for OID {oid}")
+            return None
+        
+        duration_minutes = duration_seconds / 60
+        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
+        cost_gbp = cost_usd * USD_TO_GBP_RATE
+        word_count = len(transcript_text.split())
+
+        return {
+            'oid': oid,
+            'transcription_text': transcript_text,
+            'transcribed_duration_minutes': round(duration_minutes, 2),
+            'deepgram_cost_usd': round(cost_usd, 4),
+            'deepgram_cost_gbp': round(cost_gbp, 4),
+            'word_count': word_count,
+            'confidence': round(confidence, 3),
+            'language': language
+        }
+            
+    except Exception as e:
+        print(f"❌ Deepgram transcription failed for OID {oid}: {e}")
+        return None
+
+# --- OpenAI Analysis ---
+def analyze_transcription_with_openai(transcript: str) -> Optional[Dict]:
+    """Analyze transcription using OpenAI for rankings."""
+    if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        print("❌ OpenAI not available or API key not configured.")
+        return None
+    
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    prompt = f"""
+    Analyze the following customer service call transcript and provide a rating out of 10 for the following categories:
+    1.  **Customer Engagement**: How well did the agent keep the customer involved and address their needs?
+        * Sub-category 1: Active Listening (0-10)
+        * Sub-category 2: Probing Questions (0-10)
+        * Sub-category 3: Empathy & Understanding (0-10)
+        * Sub-category 4: Clarity & Conciseness (0-10)
+    2.  **Politeness**: How polite and courteous was the agent throughout the call?
+        * Sub-category 1: Greeting & Closing (0-10)
+        * Sub-category 2: Tone & Demeanor (0-10)
+        * Sub-category 3: Respectful Language (0-10)
+        * Sub-category 4: Handling Interruptions (0-10)
+    3.  **Professional Knowledge**: How well did the agent demonstrate knowledge of the product/service and company policies?
+        * Sub-category 1: Product/Service Information (0-10)
+        * Sub-category 2: Policy Adherence (0-10)
+        * Sub-category 3: Problem Diagnosis (0-10)
+        * Sub-category 4: Solution Offering (0-10)
+    4.  **Customer Resolution**: How effectively and efficiently was the customer's issue resolved?
+        * Sub-category 1: Issue Identification (0-10)
+        * Sub-category 2: Solution Effectiveness (0-10)
+        * Sub-category 3: Time to Resolution (0-10)
+        * Sub-category 4: Follow-up & Next Steps (0-10)
+
+    Provide the output as a JSON object with the following structure. If a category or sub-category is not applicable or cannot be determined, return 0 for its score.
+
+    {{
+        "customer_engagement": {{
+            "score": [0-10],
+            "active_listening": [0-10],
+            "probing_questions": [0-10],
+            "empathy_understanding": [0-10],
+            "clarity_conciseness": [0-10]
+        }},
+        "politeness": {{
+            "score": [0-10],
+            "greeting_closing": [0-10],
+            "tone_demeanor": [0-10],
+            "respectful_language": [0-10],
+            "handling_interruptions": [0-10]
+        }},
+        "professional_knowledge": {{
+            "score": [0-10],
+            "product_service_info": [0-10],
+            "policy_adherence": [0-10],
+            "problem_diagnosis": [0-10],
+            "solution_offering": [0-10]
+        }},
+        "customer_resolution": {{
+            "score": [0-10],
+            "issue_identification": [0-10],
+            "solution_effectiveness": [0-10],
+            "time_to_resolution": [0-10],
+            "follow_up_next_steps": [0-10]
+        }},
+        "overall_score": [0-10]
+    }}
+
+    Transcript:
+    {transcript}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", # Using a more cost-effective model
+            messages=[
+                {"role": "system", "content": "You are a customer service call analyzer. Rate the agent's performance based on the transcript."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={ "type": "json_object" }
+        )
+        
+        analysis_json = json.loads(response.choices[0].message.content)
+        return analysis_json
+        
+    except Exception as e:
+        print(f"❌ OpenAI analysis failed: {e}")
+        return None
+
+def categorize_call(transcript: str) -> str:
+    """Categorize calls based on keywords in the transcript (simplified)."""
+    transcript_lower = transcript.lower()
+    
+    if "skip" in transcript_lower:
+        return "SKIP"
+    if "van" in transcript_lower or "driver" in transcript_lower or "collection" in transcript_lower:
+        return "man in van"
+    if "complaint" in transcript_lower or "unhappy" in transcript_lower or "dissatisfied" in transcript_lower:
+        return "complaint"
+    # General inquiry as a fallback if not categorized otherwise
+    return "general enquiry"
+
+# --- Main Processing Logic ---
+def process_single_call(communication_data: Dict) -> Optional[str]:
+    """
+    Downloads audio, transcribes it, analyzes with OpenAI, stores in DB, and deletes audio.
+    Returns OID if successful, None otherwise.
+    """
+    comm_obj = communication_data.get('object', {})
+    oid = comm_obj.get('oid')
+    
+    if not oid:
+        print("Skipping communication with no OID.")
+        return None
+
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
+        if cursor.fetchone():
+            print(f"Call OID {oid} already processed. Skipping.")
+            conn.close()
+            return None
+        conn.close()
+
+    print(f"\n⚙️ Processing OID: {oid}")
+
+    # 1. Download Audio
+    audio_file_path = download_audio(oid)
+    if not audio_file_path:
+        print(f"🛑 Skipping transcription for OID {oid} due to audio download failure or no audio available.")
+        # Even if no audio, we might want to log the call metadata if it's a missed call
+        xelion_metadata = _extract_agent_info(comm_obj)
+        call_datetime = comm_obj.get('date', 'Unknown')
+        call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'cancelled'] else "No Audio"
+        
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT INTO calls (
+                        oid, call_datetime, agent_name, phone_number, call_direction, 
+                        duration_seconds, status, user_id, category, processed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    oid,
+                    call_datetime,
+                    xelion_metadata['agent_name'],
+                    xelion_metadata['phone_number'],
+                    xelion_metadata['call_direction'],
+                    xelion_metadata['duration_seconds'],
+                    xelion_metadata['status'],
+                    xelion_metadata['user_id'],
+                    call_category, # Mark with a specific category
+                    datetime.now().isoformat()
+                ))
+                conn.commit()
+                print(f"📊 Stored OID {oid} (Missed/No Audio) in DB.")
+            except sqlite3.Error as e:
+                print(f"❌ Database error storing OID {oid} (Missed/No Audio): {e}")
+            finally:
+                conn.close()
+        return None
+
+    # 2. Transcribe Audio
+    # Extract Xelion metadata for storage
+    xelion_metadata = _extract_agent_info(comm_obj)
+    call_datetime = comm_obj.get('date', 'Unknown')
+
+    transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
+    
+    # 3. Delete Audio File
+    try:
+        os.remove(audio_file_path)
+        print(f"🗑️ Deleted audio file: {audio_file_path}")
+    except OSError as e:
+        print(f"❌ Error deleting audio file {audio_file_path}: {e}")
+
+    if not transcription_result:
+        print(f"🛑 Skipping analysis and DB storage for OID {oid} due to transcription failure.")
+        return None
+
+    # 4. Analyze Transcription with OpenAI
+    openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'])
+    if not openai_analysis:
+        print(f"⚠️ OpenAI analysis failed for OID {oid}. Storing partial data.")
+        openai_analysis = {} # Ensure it's an empty dict if analysis fails
+
+    # 5. Categorize Call
+    call_category = categorize_call(transcription_result['transcription_text'])
+    
+    # 6. Store in Database
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO calls (
+                    oid, call_datetime, agent_name, phone_number, call_direction, 
+                    duration_seconds, status, user_id, transcription_text, 
+                    transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
+                    word_count, confidence, language, processed_at, category,
+                    openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score,
+                    engagement_sub1, engagement_sub2, engagement_sub3, engagement_sub4,
+                    politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
+                    professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
+                    resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                oid,
+                call_datetime,
+                xelion_metadata['agent_name'],
+                xelion_metadata['phone_number'],
+                xelion_metadata['call_direction'],
+                xelion_metadata['duration_seconds'],
+                xelion_metadata['status'],
+                xelion_metadata['user_id'],
+                transcription_result['transcription_text'],
+                transcription_result['transcribed_duration_minutes'],
+                transcription_result['deepgram_cost_usd'],
+                transcription_result['deepgram_cost_gbp'],
+                transcription_result['word_count'],
+                transcription_result['confidence'],
+                transcription_result['language'],
+                datetime.now().isoformat(),
+                call_category,
+                openai_analysis.get('customer_engagement', {}).get('score', 0),
+                openai_analysis.get('politeness', {}).get('score', 0),
+                openai_analysis.get('professional_knowledge', {}).get('score', 0),
+                openai_analysis.get('customer_resolution', {}).get('score', 0),
+                openai_analysis.get('overall_score', 0),
+                openai_analysis.get('customer_engagement', {}).get('active_listening', 0),
+                openai_analysis.get('customer_engagement', {}).get('probing_questions', 0),
+                openai_analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
+                openai_analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
+                openai_analysis.get('politeness', {}).get('greeting_closing', 0),
+                openai_analysis.get('politeness', {}).get('tone_demeanor', 0),
+                openai_analysis.get('politeness', {}).get('respectful_language', 0),
+                openai_analysis.get('politeness', {}).get('handling_interruptions', 0),
+                openai_analysis.get('professional_knowledge', {}).get('product_service_info', 0),
+                openai_analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
+                openai_analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
+                openai_analysis.get('professional_knowledge', {}).get('solution_offering', 0),
+                openai_analysis.get('customer_resolution', {}).get('issue_identification', 0),
+                openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
+                openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
+                openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0)
+            ))
+            conn.commit()
+            print(f"📊 Stored OID {oid} and analysis in DB.")
+            return oid
+        except sqlite3.Error as e:
+            print(f"❌ Database error storing OID {oid}: {e}")
+            return None
+        finally:
+            conn.close()
+
+def fetch_and_transcribe_recent_calls():
+    """
+    Fetches recent calls from Xelion, processes them, and stores results.
+    Runs in a separate thread.
+    """
+    print("🚀 Starting background fetch and transcribe process...")
+    
+    if not xelion_login():
+        print("❌ Login failed. Cannot proceed with fetching.")
+        return
+
+    # Fetch calls from the last 5 minutes (adjust as needed for real-time window)
+    until_date = datetime.now()
+    
+    processed_oids = set() # To prevent reprocessing in a short polling interval
+
+    with ThreadPoolExecutor(max_workers=5) as executor: # Limit concurrent processing
+        while True:
+            print(f"\n⏰ Polling for new calls until {until_date.strftime('%Y-%m-%d %H:%M:%S')}")
+            comms, _ = _fetch_communications_page(limit=50, until_date=until_date) # Fetch a page of recent calls
+            
+            if not comms:
+                print("No new communications found in this poll.")
+            
+            futures = []
+            for comm in comms:
+                oid = comm.get('object', {}).get('oid')
+                status = comm.get('object', {}).get('status', '').lower()
+                
+                # Process all calls that are 'finished', 'missed', or 'cancelled'
+                # Xelion's API returns all communication types. We'll attempt to download audio
+                # for these statuses, and the download_audio function will handle if no audio is present (404).
+                if oid and status in ['finished', 'missed', 'cancelled'] and oid not in processed_oids:
+                    futures.append(executor.submit(process_single_call, comm))
+                    processed_oids.add(oid) # Add to set as soon as submitted
+
+            for future in as_completed(futures):
+                result_oid = future.result()
+                if result_oid:
+                    print(f"✅ Successfully processed call OID: {result_oid}")
+                else:
+                    print("❌ Failed to process a call.")
+            
+            # Remove OIDs older than 1 hour from the set to prevent it from growing indefinitely
+            # This is a simplification; a more robust solution might use a timestamp in the set.
+            if len(processed_oids) > 1000: # Arbitrary limit
+                print("Cleaning up processed_oids set...")
+                processed_oids.clear() # Clear and rebuild if too large
+
+            time.sleep(60) # Poll every 60 seconds
+
+# --- Flask Routes ---
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/fetch_and_transcribe')
+def trigger_fetch_and_transcribe():
+    # Start the background process if not already running
+    # This is a simplification. In a production app, you'd check if a thread is active.
+    thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
+    thread.daemon = True  # Allows the thread to exit when the main program exits
+    thread.start()
+    return jsonify({"status": "Process initiated. Check console for updates."})
+
+@app.route('/get_dashboard_data')
+def get_dashboard_data():
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Total counts
+        cursor.execute("SELECT COUNT(*) FROM calls")
+        total_calls = cursor.fetchone()[0]
+
+        cursor.execute("SELECT SUM(deepgram_cost_gbp) FROM calls")
+        total_cost_gbp = cursor.fetchone()[0] or 0.0
+
+        cursor.execute("SELECT SUM(transcribed_duration_minutes) FROM calls")
+        total_duration_minutes = cursor.fetchone()[0] or 0.0
+
+        # Average ratings for main categories
+        cursor.execute("""
+            SELECT AVG(openai_engagement), AVG(openai_politeness), 
+                   AVG(openai_professionalism), AVG(openai_resolution)
+            FROM calls WHERE transcription_text IS NOT NULL
+        """)
+        avg_main_scores = cursor.fetchone()
+        avg_engagement = round(avg_main_scores[0] or 0, 2)
+        avg_politeness = round(avg_main_scores[1] or 0, 2)
+        avg_professionalism = round(avg_main_scores[2] or 0, 2)
+        avg_resolution = round(avg_main_scores[3] or 0, 2)
+
+        # Average ratings for sub-categories (example for engagement)
+        cursor.execute("""
+            SELECT AVG(engagement_sub1), AVG(engagement_sub2), 
+                   AVG(engagement_sub3), AVG(engagement_sub4)
+            FROM calls WHERE transcription_text IS NOT NULL
+        """)
+        avg_engagement_subs = cursor.fetchone()
+        engagement_subs = {
+            "active_listening": round(avg_engagement_subs[0] or 0, 2),
+            "probing_questions": round(avg_engagement_subs[1] or 0, 2),
+            "empathy_understanding": round(avg_engagement_subs[2] or 0, 2),
+            "clarity_conciseness": round(avg_engagement_subs[3] or 0, 2),
+        }
+        
+        # Politeness sub-categories
+        cursor.execute("""
+            SELECT AVG(politeness_sub1), AVG(politeness_sub2), 
+                   AVG(politeness_sub3), AVG(politeness_sub4)
+            FROM calls WHERE transcription_text IS NOT NULL
+        """)
+        avg_politeness_subs = cursor.fetchone()
+        politeness_subs = {
+            "greeting_closing": round(avg_politeness_subs[0] or 0, 2),
+            "tone_demeanor": round(avg_politeness_subs[1] or 0, 2),
+            "respectful_language": round(avg_politeness_subs[2] or 0, 2),
+            "handling_interruptions": round(avg_politeness_subs[3] or 0, 2),
+        }
+
+        # Professional Knowledge sub-categories
+        cursor.execute("""
+            SELECT AVG(professionalism_sub1), AVG(professionalism_sub2), 
+                   AVG(professionalism_sub3), AVG(professionalism_sub4)
+            FROM calls WHERE transcription_text IS NOT NULL
+        """)
+        avg_professionalism_subs = cursor.fetchone()
+        professionalism_subs = {
+            "product_service_info": round(avg_professionalism_subs[0] or 0, 2),
+            "policy_adherence": round(avg_professionalism_subs[1] or 0, 2),
+            "problem_diagnosis": round(avg_professionalism_subs[2] or 0, 2),
+            "solution_offering": round(avg_professionalism_subs[3] or 0, 2),
+        }
+
+        # Customer Resolution sub-categories
+        cursor.execute("""
+            SELECT AVG(resolution_sub1), AVG(resolution_sub2), 
+                   AVG(resolution_sub3), AVG(resolution_sub4)
+            FROM calls WHERE transcription_text IS NOT NULL
+        """)
+        avg_resolution_subs = cursor.fetchone()
+        resolution_subs = {
+            "issue_identification": round(avg_resolution_subs[0] or 0, 2),
+            "solution_effectiveness": round(avg_resolution_subs[1] or 0, 2),
+            "time_to_resolution": round(avg_resolution_subs[2] or 0, 2),
+            "follow_up_next_steps": round(avg_resolution_subs[3] or 0, 2),
+        }
+
+        # Average call rating per category
+        category_ratings = {}
+        # Include the new "Missed/No Audio" category
+        categories = ["SKIP", "man in van", "general enquiry", "complaint", "Missed/No Audio"] 
+        for cat in categories:
+            cursor.execute("SELECT AVG(openai_overall_score), COUNT(*) FROM calls WHERE category = ?", (cat,))
+            result = cursor.fetchone()
+            # For "Missed/No Audio" calls, scores will be 0 as there's no transcription.
+            avg_score = round(result[0] or 0, 2)
+            count = result[1]
+            category_ratings[cat] = {"average_score": avg_score, "count": count}
+
+        conn.close()
 
         return jsonify({
-            "message": "Call info retrieved.",
-            "device_oid": device_oid,
-            "active_call_oid": active_call_oid
+            "total_calls": total_calls,
+            "total_cost_gbp": round(total_cost_gbp, 2),
+            "total_duration_minutes": round(total_duration_minutes, 2),
+            "average_ratings": {
+                "customer_engagement": avg_engagement,
+                "politeness": avg_politeness,
+                "professional_knowledge": avg_professionalism,
+                "customer_resolution": avg_resolution
+            },
+            "sub_category_ratings": {
+                "customer_engagement": engagement_subs,
+                "politeness": politeness_subs,
+                "professional_knowledge": professionalism_subs,
+                "customer_resolution": resolution_subs
+            },
+            "category_call_ratings": category_ratings
         })
 
-    except requests.exceptions.RequestException as e:
-        error_details = str(e)
-        if e.response is not None:
-            error_details = e.response.text
-        app.logger.error(f"Failed to retrieve Xelion info: {error_details}")
-        return jsonify({"error": "Failed to retrieve Xelion info", "details": error_details}), 500
-
-@app.route('/api/xelion/transfer_call', methods=['POST'])
-def transfer_xelion_call():
-    """
-    Initiates a call transfer on Xelion.
-    Requires an active Xelion token, and previously obtained device_oid and active_call_oid.
-    """
-    if not xelion_auth_token or (xelion_token_expiry and datetime.now(xelion_token_expiry.tzinfo) > xelion_token_expiry):
-        app.logger.warning("Attempted call transfer with missing/expired Xelion token.")
-        return jsonify({"error": "Xelion token is missing or expired. Please login first."}), 401
-
-    if not all([XELION_BASE_URL, TWILIO_PHONE_NUMBER, FINAL_DESTINATION_NUMBER]):
-        return jsonify({"error": "Server configuration error: Twilio or Xelion numbers missing"}), 500
-    
-    # Use globally stored OIDs, or get them from request if passed.
-    # For this minimal setup, we'll rely on global state from previous calls.
-    device_oid = current_device_oid
-    active_call_oid = current_active_call_oid
-
-    if not device_oid or not active_call_oid:
-        app.logger.error("Missing device_oid or active_call_oid for transfer. Run /api/xelion/get_call_info first.")
-        return jsonify({"error": "Device OID or Active Call OID not set. Please run /api/xelion/get_call_info first."}), 400
-
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": xelion_auth_token
-    }
-
-    try:
-        # Step 1: Initiate a new outbound call from Xelion to your Twilio number
-        app.logger.info(f"Xelion: Initiating new outbound call from device {device_oid} to Twilio number {TWILIO_PHONE_NUMBER}")
-        start_call_url = f"{XELION_BASE_URL}/phones/{device_oid}/call"
-        start_call_payload = {
-            "address": TWILIO_PHONE_NUMBER,
-            "callType": "outbound"
-        }
-        start_call_response = requests.post(start_call_url, headers=headers, json=start_call_payload)
-        start_call_response.raise_for_status()
-        new_call_data = start_call_response.json()
-        new_call_oid = new_call_data.get("object", {}).get("oid")
-        
-        if not new_call_oid:
-            app.logger.error("Xelion did not return a new call OID after initiating call to Twilio.")
-            return jsonify({"error": "Xelion did not return a new call OID after initiation"}), 500
-        
-        app.logger.info(f"Xelion: New call to Twilio initiated successfully. New Call OID: {new_call_oid}")
-
-        # Step 2: Transfer the original call with the newly initiated call
-        app.logger.info(f"Xelion: Attempting to transfer original call {active_call_oid} with new call {new_call_oid}")
-        transfer_url = f"{XELION_BASE_URL}/phones/{device_oid}/transferSelectedCalls"
-        transfer_payload = {
-            "callOids": [active_call_oid, new_call_oid]
-        }
-        transfer_response = requests.post(transfer_url, headers=headers, json=transfer_payload)
-        transfer_response.raise_for_status()
-
-        app.logger.info("Xelion: Call transfer process successfully initiated.")
-        return jsonify({"message": "Call transfer process initiated successfully."})
-
-    except requests.exceptions.RequestException as e:
-        error_details = str(e)
-        if e.response is not None:
-            error_details = e.response.text
-        app.logger.error(f"Xelion call transfer failed: {error_details}")
-        return jsonify({"error": "Failed to transfer call via Xelion", "details": error_details}), 500
-
-# --- Twilio Webhook Endpoint ---
-@app.route('/voice', methods=['POST'])
-def twilio_voice():
-    """
-    This endpoint is called by Twilio when your Twilio number receives a call.
-    It generates TwiML to forward the call to the FINAL_DESTINATION_NUMBER.
-    """
-    call_sid = request.form.get('CallSid', 'N/A')
-    from_number = request.form.get('From', 'N/A')
-    to_number = request.form.get('To', 'N/A')
-
-    app.logger.info(f"Twilio Webhook Received: Call SID={call_sid}, From={from_number}, To={to_number}")
-
-    if not FINAL_DESTINATION_NUMBER:
-        app.logger.error("Server configuration error: FINAL_DESTINATION_NUMBER is not set for Twilio webhook.")
-        response = VoiceResponse()
-        response.say("Call transfer failed due to missing configuration.")
-        return str(response), 200, {'Content-Type': 'text/xml'}
-
-    response = VoiceResponse()
-    response.dial(FINAL_DESTINATION_NUMBER)
-
-    app.logger.info(f"Twilio Webhook: Generated TwiML to dial {FINAL_DESTINATION_NUMBER}")
-    return str(response), 200, {'Content-Type': 'text/xml'}
-
-# --- Home Route (basic instructions) ---
-@app.route('/')
-def home():
-    return jsonify({
-        "message": "Welcome to the Xelion Call Forwarder!",
-        "instructions": [
-            "1. Send a POST request to /api/xelion/login to get your Xelion token.",
-            "2. Send a GET request to /api/xelion/get_call_info to get your device OID and active call OID (ensure a call is active on your Xelion device).",
-            "3. Send a POST request to /api/xelion/transfer_call to initiate the transfer.",
-            "4. Configure your Twilio number's voice webhook to POST to your_app_url/voice."
-        ]
-    })
-
-
-# --- Run the Flask App ---
 if __name__ == '__main__':
-    # For local development, load environment variables from a .env file
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        app.logger.info("Loaded environment variables from .env file (if it exists).")
-    except ImportError:
-        app.logger.warning("python-dotenv not installed. Environment variables must be set manually for local development.")
-
-    # Get port from environment, default to 5000
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=True) # debug=True for local dev, False for production
+    init_db()
+    # For Koyeb deployment with Gunicorn, you would typically not run app.run() here.
+    # Gunicorn handles starting the Flask application.
+    # The background thread for fetching calls can be initiated via a startup script
+    # or a separate worker process on Koyeb if real-time polling is desired.
+    # For local testing:
+    # threading.Thread(target=fetch_and_transcribe_recent_calls, daemon=True).start()
+    app.run(debug=True, host='0.0.0.0', port=5000)
