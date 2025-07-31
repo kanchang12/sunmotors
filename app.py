@@ -669,10 +669,10 @@ def fetch_and_transcribe_recent_calls():
             time.sleep(60) # Poll every 60 seconds
 
 # --- Flask Routes ---
-@app.before_first_request
-def startup_init():
-    """Ensure database is initialized before handling first request."""
-    init_db()
+
+# No longer using @app.before_first_request due to deprecation/removal in newer Flask versions.
+# Database initialization will be handled by the direct call in __name__ == '__main__' or
+# by an explicit call if using a WSGI server like Gunicorn.
 
 @app.route('/')
 def index():
@@ -811,7 +811,12 @@ def init_db_manual():
     return "Database initialization attempted (check logs for details)."
 
 if __name__ == '__main__':
-    # When running locally, this ensures init_db is called.
-    # For Gunicorn/Koyeb, @app.before_first_request is more reliable.
+    # Initialize the database when the script is run directly.
+    # When deployed with Gunicorn, this block might not always run in the context
+    # you expect for table creation, but it's crucial for local development.
+    # For production deployments with Gunicorn and ephemeral filesystems,
+    # consider setting up a custom entrypoint (e.g., in a Procfile)
+    # that runs `python -c "from app import init_db; init_db()"`
+    # before starting gunicorn, or using a persistent volume if possible.
     init_db() 
     app.run(debug=True, host='0.0.0.0', port=5000)
