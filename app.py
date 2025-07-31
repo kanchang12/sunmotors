@@ -89,6 +89,25 @@ def log_error(message, error=None):
     # Update global error tracking
     processing_stats['last_error'] = f"{message}: {error}" if error else message
 
+def test_openai_connection() -> bool:
+    """Test OpenAI API connection with a simple request"""
+    if not OPENAI_AVAILABLE or not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
+        return False
+    
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Return JSON: {\"test\": 5}"}],
+            response_format={"type": "json_object"},
+            max_tokens=50
+        )
+        result = json.loads(response.choices[0].message.content)
+        return 'test' in result and result['test'] == 5
+    except Exception as e:
+        log_error("OpenAI connection test failed", e)
+        return False
+
 # --- Database Initialization Function ---
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_FILE)
@@ -611,25 +630,6 @@ def categorize_call(transcript: str) -> str:
     if "complaint" in transcript_lower or "unhappy" in transcript_lower or "dissatisfied" in transcript_lower:
         return "complaint"
     return "general enquiry"
-
-def test_openai_connection() -> bool:
-    """Test OpenAI API connection with a simple request"""
-    if not OPENAI_AVAILABLE or not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
-        return False
-    
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Return JSON: {\"test\": 5}"}],
-            response_format={"type": "json_object"},
-            max_tokens=50
-        )
-        result = json.loads(response.choices[0].message.content)
-        return 'test' in result and result['test'] == 5
-    except Exception as e:
-        log_error("OpenAI connection test failed", e)
-        return False
 
 # --- Main Processing Logic ---
 def process_single_call(communication_data: Dict) -> Optional[str]:
