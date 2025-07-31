@@ -639,7 +639,8 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         engagement_sub1, engagement_sub2, engagement_sub3, engagement_sub4,
                         politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
                         professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
-                        resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, raw_communication_data
+                        resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
+                        processing_error, raw_communication_data
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
@@ -669,6 +670,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
                     openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
                     openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                    None,  # processing_error - None for successful processing
                     raw_data
                 ))
                 conn.commit()
