@@ -1,235 +1,378 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Used Car AI Assistant</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-     <style>
-        .step:before {
-            @apply bg-gray-400 text-white;
+    <title>Call Analysis Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            color: #2c3e50;
+        }
+        .card {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+            height: 100%; /* Ensure cards in a row have equal height */
+        }
+        .card-title {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: #34495e;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+        }
+        .stats-item {
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+        }
+        .stats-item strong {
+            color: #555;
+        }
+        .gauge-container {
+            width: 150px;
+            height: 150px;
+            margin: 0 auto;
+            position: relative;
+        }
+        .gauge-label {
+            position: absolute;
+            bottom: 10px;
+            width: 100%;
+            text-align: center;
+            font-weight: bold;
+        }
+        .category-score {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .sub-category-list {
+            list-style: none;
+            padding: 0;
+            margin-top: 10px;
+        }
+        .sub-category-list li {
+            margin-bottom: 5px;
+            font-size: 0.95rem;
+        }
+        .sub-category-list li strong {
+            color: #666;
+        }
+        .button-container {
+            text-align: center;
+            margin-top: 30px;
         }
     </style>
-<script>
-    document.addEventListener('DOMContentLoaded', () => {
-        const queryInput = document.getElementById('search-input');
-        const sendButton = document.getElementById('send-btn');
-        const chatContainer = document.getElementById('message-container');
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Call Analysis Dashboard</h1>
+            <p>Real-time insights from Xelion call transcriptions and OpenAI analysis.</p>
+        </div>
 
-        if (!queryInput || !sendButton || !chatContainer) {
-            console.error("One or more elements (queryInput, sendButton, chatContainer) not found.");
-            return;
+        <div class="button-container">
+            <button class="btn btn-primary btn-lg" id="fetchCallsButton">
+                Start Live Call Monitoring & Analysis
+            </button>
+            <p class="mt-2 text-muted">Click to begin fetching recent calls, transcribing, and analyzing.</p>
+        </div>
+
+        <hr>
+
+        <div class="row">
+            <div class="col-md-4">
+                <div class="card">
+                    <h5 class="card-title">Overall Statistics</h5>
+                    <div class="stats-item">Total Calls Processed: <strong id="totalCalls">0</strong></div>
+                    <div class="stats-item">Total Deepgram Cost: <strong id="totalCost">£0.00</strong></div>
+                    <div class="stats-item">Total Transcribed Duration: <strong id="totalDuration">0.00 mins</strong></div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="card">
+                    <h5 class="card-title">Average Call Category Ratings (Overall Score)</h5>
+                    <div class="row text-center">
+                        <div class="col-md-3">
+                            <div class="gauge-container">
+                                <canvas id="skipGauge"></canvas>
+                                <div class="gauge-label">SKIP</div>
+                            </div>
+                            <small id="skipCount">(0 calls)</small>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="gauge-container">
+                                <canvas id="manInVanGauge"></canvas>
+                                <div class="gauge-label">Man in Van</div>
+                            </div>
+                            <small id="manInVanCount">(0 calls)</small>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="gauge-container">
+                                <canvas id="generalEnquiryGauge"></canvas>
+                                <div class="gauge-label">General Enquiry</div>
+                            </div>
+                            <small id="generalEnquiryCount">(0 calls)</small>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="gauge-container">
+                                <canvas id="complaintGauge"></canvas>
+                                <div class="gauge-label">Complaint</div>
+                            </div>
+                            <small id="complaintCount">(0 calls)</small>
+                        </div>
+                         <div class="col-md-3 mt-3">
+                            <div class="gauge-container">
+                                <canvas id="missedNoAudioGauge"></canvas>
+                                <div class="gauge-label">Missed/No Audio</div>
+                            </div>
+                            <small id="missedNoAudioCount">(0 calls)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <h5 class="card-title">Average Agent Performance Ratings</h5>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item">
+                            Customer Engagement: <span class="category-score" id="avgEngagement">0.00</span> / 10
+                            <ul class="sub-category-list">
+                                <li><strong>Active Listening:</strong> <span id="subEngagement1">0.00</span></li>
+                                <li><strong>Probing Questions:</strong> <span id="subEngagement2">0.00</span></li>
+                                <li><strong>Empathy & Understanding:</strong> <span id="subEngagement3">0.00</span></li>
+                                <li><strong>Clarity & Conciseness:</strong> <span id="subEngagement4">0.00</span></li>
+                            </ul>
+                        </li>
+                        <li class="list-group-item">
+                            Politeness: <span class="category-score" id="avgPoliteness">0.00</span> / 10
+                            <ul class="sub-category-list">
+                                <li><strong>Greeting & Closing:</strong> <span id="subPoliteness1">0.00</span></li>
+                                <li><strong>Tone & Demeanor:</strong> <span id="subPoliteness2">0.00</span></li>
+                                <li><strong>Respectful Language:</strong> <span id="subPoliteness3">0.00</span></li>
+                                <li><strong>Handling Interruptions:</strong> <span id="subPoliteness4">0.00</span></li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <h5 class="card-title">Average Agent Performance Ratings (Cont.)</h5>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item">
+                            Professional Knowledge: <span class="category-score" id="avgProfessionalism">0.00</span> / 10
+                            <ul class="sub-category-list">
+                                <li><strong>Product/Service Information:</strong> <span id="subProfessionalism1">0.00</span></li>
+                                <li><strong>Policy Adherence:</strong> <span id="subProfessionalism2">0.00</span></li>
+                                <li><strong>Problem Diagnosis:</strong> <span id="subProfessionalism3">0.00</span></li>
+                                <li><strong>Solution Offering:</strong> <span id="subProfessionalism4">0.00</span></li>
+                            </ul>
+                        </li>
+                        <li class="list-group-item">
+                            Customer Resolution: <span class="category-score" id="avgResolution">0.00</span> / 10
+                            <ul class="sub-category-list">
+                                <li><strong>Issue Identification:</strong> <span id="subResolution1">0.00</span></li>
+                                <li><strong>Solution Effectiveness:</strong> <span id="subResolution2">0.00</span></li>
+                                <li><strong>Time to Resolution:</strong> <span id="subResolution3">0.00</span></li>
+                                <li><strong>Follow-up & Next Steps:</strong> <span id="subResolution4">0.00</span></li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Gauge Chart Utility ---
+        function createGaugeChart(ctx, value, label) {
+            return new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Score', 'Remaining'],
+                    datasets: [{
+                        data: [value, 10 - value],
+                        backgroundColor: ['#007bff', '#e9ecef'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '80%',
+                    rotation: 270,
+                    circumference: 180,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            enabled: false
+                        }
+                    },
+                    elements: {
+                        arc: {
+                            borderWidth: 0
+                        }
+                    },
+                    layout: {
+                        padding: {
+                            bottom: 20
+                        }
+                    },
+                    animation: {
+                        animateRotate: true,
+                        animateScale: true
+                    },
+                    onClick: null, // Disable click behavior
+                    onHover: null, // Disable hover behavior
+                },
+                plugins: [{
+                    id: 'textCenter',
+                    beforeDraw: function(chart) {
+                        var width = chart.width,
+                            height = chart.height,
+                            ctx = chart.ctx;
+
+                        ctx.restore();
+                        var fontSize = (height / 114).toFixed(2);
+                        ctx.font = "bold " + fontSize + "em sans-serif";
+                        ctx.textBaseline = "middle";
+
+                        var text = chart.data.datasets[0].data[0].toFixed(1) + '/10',
+                            textX = Math.round((width - ctx.measureText(text).width) / 2),
+                            textY = height - 30; // Position above the label
+
+                        ctx.fillText(text, textX, textY);
+                        ctx.save();
+                    }
+                }]
+            });
         }
 
-        function addMessage(message, isUserMessage = false) {
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add('p-4', 'mb-2', 'bg-gray-100', 'rounded-lg');
-            if (isUserMessage) {
-                messageDiv.classList.add('user-message');
-                messageDiv.innerHTML =
-                    `<div class="message-content">
-                        <p><strong>User:</strong> ${message}</p>
-                    </div>`;
-            } else {
-                messageDiv.classList.add('assistant-message');
-                messageDiv.innerHTML =
-                    `<div class="message-content">
-                        <p><strong>Car AI:</strong> ${message}</p>
-                    </div>`;
-            }
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+        let skipGaugeChart, manInVanGaugeChart, generalEnquiryGaugeChart, complaintGaugeChart, missedNoAudioGaugeChart;
+
+        function updateGauges(data) {
+            const categories = data.category_call_ratings;
+
+            // Initialize or update SKIP gauge
+            const skipCanvas = document.getElementById('skipGauge');
+            const skipScore = categories.SKIP ? categories.SKIP.average_score : 0;
+            const skipCount = categories.SKIP ? categories.SKIP.count : 0;
+            document.getElementById('skipCount').innerText = `(${skipCount} calls)`;
+            if (skipGaugeChart) skipGaugeChart.destroy();
+            skipGaugeChart = createGaugeChart(skipCanvas.getContext('2d'), skipScore, 'SKIP');
+
+            // Initialize or update Man in Van gauge
+            const manInVanCanvas = document.getElementById('manInVanGauge');
+            const manInVanScore = categories['man in van'] ? categories['man in van'].average_score : 0;
+            const manInVanCount = categories['man in van'] ? categories['man in van'].count : 0;
+            document.getElementById('manInVanCount').innerText = `(${manInVanCount} calls)`;
+            if (manInVanGaugeChart) manInVanGaugeChart.destroy();
+            manInVanGaugeChart = createGaugeChart(manInVanCanvas.getContext('2d'), manInVanScore, 'Man in Van');
+
+            // Initialize or update General Enquiry gauge
+            const generalEnquiryCanvas = document.getElementById('generalEnquiryGauge');
+            const generalEnquiryScore = categories['general enquiry'] ? categories['general enquiry'].average_score : 0;
+            const generalEnquiryCount = categories['general enquiry'] ? categories['general enquiry'].count : 0;
+            document.getElementById('generalEnquiryCount').innerText = `(${generalEnquiryCount} calls)`;
+            if (generalEnquiryGaugeChart) generalEnquiryGaugeChart.destroy();
+            generalEnquiryGaugeChart = createGaugeChart(generalEnquiryCanvas.getContext('2d'), generalEnquiryScore, 'General Enquiry');
+
+            // Initialize or update Complaint gauge
+            const complaintCanvas = document.getElementById('complaintGauge');
+            const complaintScore = categories.complaint ? categories.complaint.average_score : 0;
+            const complaintCount = categories.complaint ? categories.complaint.count : 0;
+            document.getElementById('complaintCount').innerText = `(${complaintCount} calls)`;
+            if (complaintGaugeChart) complaintGaugeChart.destroy();
+            complaintGaugeChart = createGaugeChart(complaintCanvas.getContext('2d'), complaintScore, 'Complaint');
+
+            // Initialize or update Missed/No Audio gauge
+            const missedNoAudioCanvas = document.getElementById('missedNoAudioGauge');
+            const missedNoAudioScore = categories['Missed/No Audio'] ? categories['Missed/No Audio'].average_score : 0;
+            const missedNoAudioCount = categories['Missed/No Audio'] ? categories['Missed/No Audio'].count : 0;
+            document.getElementById('missedNoAudioCount').innerText = `(${missedNoAudioCount} calls)`;
+            if (missedNoAudioGaugeChart) missedNoAudioGaugeChart.destroy();
+            missedNoAudioGaugeChart = createGaugeChart(missedNoAudioCanvas.getContext('2d'), missedNoAudioScore, 'Missed/No Audio');
         }
 
-        async function sendMessage() {
-            const query = queryInput.value.trim();
-            if (!query) return;
 
-            addMessage(query, true);
-            queryInput.value = '';
-
-            const assistantMessageDiv = document.createElement('div');
-            assistantMessageDiv.classList.add('p-4', 'mb-2', 'bg-gray-100', 'rounded-lg', 'assistant-message');
-            assistantMessageDiv.innerHTML =
-                `<div class="message-content">
-                    <p>Thinking...</p>
-                </div>`;
-            chatContainer.appendChild(assistantMessageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-
+        // --- Fetch and Update Data ---
+        async function fetchDashboardData() {
             try {
-                const response = await fetch('/api/search', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query })
-                });
-
-                if (!response.ok) {
-                    assistantMessageDiv.innerHTML =
-                        `<div class="message-content">
-                            <p>Error: ${response.status} - ${response.statusText}</p>
-                        </div>`;
-                    return;
-                }
-
+                const response = await fetch('/get_dashboard_data');
                 const data = await response.json();
 
-                if (data.error) {
-                    assistantMessageDiv.innerHTML =
-                        `<div class="message-content">
-                            <p>Error: ${data.error}</p>
-                        </div>`;
-                } else {
-                    try {
-                        // Assuming data.results contains text and not an object or array.
-                        const resultText = data.results || ''; 
+                document.getElementById('totalCalls').innerText = data.total_calls.toLocaleString();
+                document.getElementById('totalCost').innerText = `£${data.total_cost_gbp.toFixed(2)}`;
+                document.getElementById('totalDuration').innerText = `${data.total_duration_minutes.toFixed(2)} mins`;
 
-                        // Add line breaks for each sentence or line.
-                        let formattedText = resultText.split('. ').join('.<br>');  // Adds <br> after each sentence.
+                document.getElementById('avgEngagement').innerText = data.average_ratings.customer_engagement.toFixed(2);
+                document.getElementById('subEngagement1').innerText = data.sub_category_ratings.customer_engagement.active_listening.toFixed(2);
+                document.getElementById('subEngagement2').innerText = data.sub_category_ratings.customer_engagement.probing_questions.toFixed(2);
+                document.getElementById('subEngagement3').innerText = data.sub_category_ratings.customer_engagement.empathy_understanding.toFixed(2);
+                document.getElementById('subEngagement4').innerText = data.sub_category_ratings.customer_engagement.clarity_conciseness.toFixed(2);
 
-                        assistantMessageDiv.innerHTML = `
-                            <div class="message-content">
-                                <p>${formattedText}</p>
-                            </div>
-                        `;
-                    } catch (error) {
-                        assistantMessageDiv.innerHTML = `
-                            <div class="message-content">
-                                <p>An error occurred. Please try again.</p>
-                            </div>
-                        `;
-                        console.error('Error:', error);
-                    }
-                }
+                document.getElementById('avgPoliteness').innerText = data.average_ratings.politeness.toFixed(2);
+                document.getElementById('subPoliteness1').innerText = data.sub_category_ratings.politeness.greeting_closing.toFixed(2);
+                document.getElementById('subPoliteness2').innerText = data.sub_category_ratings.politeness.tone_demeanor.toFixed(2);
+                document.getElementById('subPoliteness3').innerText = data.sub_category_ratings.politeness.respectful_language.toFixed(2);
+                document.getElementById('subPoliteness4').innerText = data.sub_category_ratings.politeness.handling_interruptions.toFixed(2);
 
-                chatContainer.appendChild(assistantMessageDiv);
-                chatContainer.scrollTop = chatContainer.scrollHeight;
+                document.getElementById('avgProfessionalism').innerText = data.average_ratings.professional_knowledge.toFixed(2);
+                document.getElementById('subProfessionalism1').innerText = data.sub_category_ratings.professional_knowledge.product_service_info.toFixed(2);
+                document.getElementById('subProfessionalism2').innerText = data.sub_category_ratings.professional_knowledge.policy_adherence.toFixed(2);
+                document.getElementById('subProfessionalism3').innerText = data.sub_category_ratings.professional_knowledge.problem_diagnosis.toFixed(2);
+                document.getElementById('subProfessionalism4').innerText = data.sub_category_ratings.professional_knowledge.solution_offering.toFixed(2);
+
+                document.getElementById('avgResolution').innerText = data.average_ratings.customer_resolution.toFixed(2);
+                document.getElementById('subResolution1').innerText = data.sub_category_ratings.customer_resolution.issue_identification.toFixed(2);
+                document.getElementById('subResolution2').innerText = data.sub_category_ratings.customer_resolution.solution_effectiveness.toFixed(2);
+                document.getElementById('subResolution3').innerText = data.sub_category_ratings.customer_resolution.time_to_resolution.toFixed(2);
+                document.getElementById('subResolution4').innerText = data.sub_category_ratings.customer_resolution.follow_up_next_steps.toFixed(2);
+
+                updateGauges(data);
 
             } catch (error) {
-                assistantMessageDiv.innerHTML =
-                    `<div class="message-content">
-                        <p>An error occurred. Please try again.</p>
-                    </div>`;
-                console.error('Error:', error);
+                console.error('Error fetching dashboard data:', error);
             }
         }
 
-        sendButton.addEventListener('click', sendMessage);
-        queryInput.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
+        document.getElementById('fetchCallsButton').addEventListener('click', async () => {
+            document.getElementById('fetchCallsButton').disabled = true;
+            document.getElementById('fetchCallsButton').innerText = 'Monitoring Calls...';
+            try {
+                const response = await fetch('/fetch_and_transcribe');
+                const data = await response.json();
+                console.log(data.status);
+                // Start polling for updates after initiating the process
+                setInterval(fetchDashboardData, 5000); // Poll every 5 seconds
+            } catch (error) {
+                console.error('Error initiating fetch and transcribe:', error);
+                document.getElementById('fetchCallsButton').disabled = false;
+                document.getElementById('fetchCallsButton').innerText = 'Start Live Call Monitoring & Analysis';
             }
         });
-    });
-</script>
 
-</head>
-
-<body class="bg-gray-50 min-h-screen flex">
-
-    <!-- Sidebar -->
-    <aside class="w-64 bg-white border-r shadow-lg p-4 flex flex-col justify-between">
-        <div>
-            <div class="flex items-center space-x-2 mb-6">
-                <div class="bg-blue-500 p-2 rounded-full">
-                    <img src="https://img.icons8.com/ios/40/ffffff/car.png" alt="Car Icon" class="w-6 h-6">
-                </div>
-                <h1 class="text-xl font-semibold text-gray-900">Car AI</h1>
-            </div>
-
-            <nav class="space-y-3">
-                <a href="#" class="flex items-center space-x-3 px-4 py-2 rounded-lg text-gray-900 bg-gray-100">
-                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h18M9 6l-6 6 6 6" />
-                    </svg>
-                    <span>Home</span>
-                </a>
-                <a href="#" class="flex items-center space-x-3 px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100">
-                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16l-4-4m0 0l4-4m-4 4h16" />
-                    </svg>
-                    <span>Discover</span>
-                </a>
-                <a href="#" class="flex items-center space-x-3 px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100">
-                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-3.866 0-7 2.239-7 5s3.134 5 7 5 7-2.239 7-5-3.134-5-7-5z" />
-                    </svg>
-                    <span>History</span>
-                </a>
-            </nav>
-        </div>
-
-        <div class="space-y-4">
-            <button class="flex items-center justify-center w-full px-4 py-2 text-gray-900 bg-gray-100 rounded-lg">
-                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-                </svg>
-                <span class="ml-2">Dark Mode</span>
-            </button>
-            <div class="flex items-center space-x-2">
-                <div class="w-8 h-8 bg-gray-200 rounded-full"></div>
-                <div>
-                    <p class="text-sm font-semibold text-gray-900">John Doe</p>
-                    <p class="text-xs text-gray-600">Premium</p>
-                </div>
-            </div>
-        </div>
-    </aside>
-
-    <!-- Main Content -->
-    <main class="flex-grow p-8 overflow-y-auto">
-        <div class="max-w-4xl mx-auto">
-            <!-- Header -->
-            <div class="flex items-center justify-between mb-8">
-                <h2 class="text-2xl font-bold text-gray-900">Used Car AI Assistant</h2>
-            </div>
-
-            <!-- Search -->
-            <div class="mb-8">
-                <label class="block mb-2 text-lg font-medium text-gray-700">What would you like to know about your vehicle?</label>
-                <div class="relative">
-                    <input id="search-input" type="text" class="w-full px-4 py-2 text-gray-900 bg-white border rounded-lg shadow-sm" placeholder="Ask anything about cars, maintenance, or driving...">
-                    <button id="send-btn" class="absolute top-1/2 right-2 transform -translate-y-1/2 bg-blue-500 text-white px-4 py-2 rounded-lg shadow">Search</button>
-                </div>
-            </div>
-
-            <!-- Chatbot Messages -->
-            <div id="message-container" class="bg-white p-4 border rounded-lg shadow h-64 overflow-y-auto">
-                <!-- Messages will be dynamically injected here -->
-            </div>
-
-            <!-- Cards -->
-<div class="grid grid-cols-2 gap-6 mt-8">
-    <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
-        <h3 class="text-lg font-semibold text-blue-600">Common car problems</h3>
-        <p class="text-sm text-gray-600">Quick issue diagnosis</p>
-    </a>
-    <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
-        <h3 class="text-lg font-semibold text-orange-500">Maintenance schedule</h3>
-        <p class="text-sm text-gray-600">Regular upkeep tips</p>
-    </a>
-    <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
-        <h3 class="text-lg font-semibold text-green-500">Fuel efficiency tips</h3>
-        <p class="text-sm text-gray-600">Improve MPG</p>
-    </a>
-    <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
-        <h3 class="text-lg font-semibold text-purple-500">Road trip planning</h3>
-        <p class="text-sm text-gray-600">Journey essentials</p>
-    </a>
-    <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
-        <h3 class="text-lg font-semibold text-red-500">Warning lights</h3>
-        <p class="text-sm text-gray-600">Decode indicators</p>
-    </a>
-    <a href="https://www.sunmotors.co.uk" target="_blank" class="p-4 bg-white border rounded-lg shadow hover:shadow-lg">
-        <h3 class="text-lg font-semibold text-gray-700">Performance tuning</h3>
-        <p class="text-sm text-gray-600">Boost your ride</p>
-    </a>
-</div>
-
-        </div>
-    </main>
+        // Initial fetch when the page loads
+        fetchDashboardData();
+    </script>
 </body>
-
 </html>
