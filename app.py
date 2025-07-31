@@ -143,6 +143,18 @@ def init_db():
 app = Flask(__name__)
 init_db()
 
+# Test configurations on startup
+log_with_timestamp("🚀 Application starting up...")
+log_with_timestamp(f"Deepgram SDK available: {DEEPGRAM_SDK_AVAILABLE}")
+log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
+log_with_timestamp(f"OpenAI API key configured: {OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'}")
+
+if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
+    openai_test = test_openai_connection()
+    log_with_timestamp(f"OpenAI connection test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
+else:
+    log_with_timestamp("⚠️ OpenAI not properly configured - analysis will fail!")
+
 # --- Xelion API Functions ---
 def xelion_login() -> bool:
     global session_token
@@ -434,93 +446,142 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         return None
 
 # --- OpenAI Analysis ---
-def analyze_transcription_with_openai(transcript: str) -> Optional[Dict]:
+def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> Optional[Dict]:
     """Analyze transcription using OpenAI for rankings with detailed logging."""
-    if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
-        log_error("OpenAI not available or API key not configured")
+    if not OPENAI_AVAILABLE:
+        log_error(f"OpenAI library not available for OID {oid}")
+        return None
+        
+    if not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
+        log_error(f"OpenAI API key not configured or using placeholder for OID {oid}")
         return None
     
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    # Truncate very long transcripts
+    if len(transcript) > 4000:
+        transcript = transcript[:4000] + "... (truncated)"
+        log_with_timestamp(f"Truncated long transcript for OID {oid}")
     
-    prompt = f"""
-    Analyze the following customer service call transcript and provide a rating out of 10 for the following categories:
-    1.  **Customer Engagement**: How well did the agent keep the customer involved and address their needs?
-        * Sub-category 1: Active Listening (0-10)
-        * Sub-category 2: Probing Questions (0-10)
-        * Sub-category 3: Empathy & Understanding (0-10)
-        * Sub-category 4: Clarity & Conciseness (0-10)
-    2.  **Politeness**: How polite and courteous was the agent throughout the call?
-        * Sub-category 1: Greeting & Closing (0-10)
-        * Sub-category 2: Tone & Demeanor (0-10)
-        * Sub-category 3: Respectful Language (0-10)
-        * Sub-category 4: Handling Interruptions (0-10)
-    3.  **Professional Knowledge**: How well did the agent demonstrate knowledge of the product/service and company policies?
-        * Sub-category 1: Product/Service Information (0-10)
-        * Sub-category 2: Policy Adherence (0-10)
-        * Sub-category 3: Problem Diagnosis (0-10)
-        * Sub-category 4: Solution Offering (0-10)
-    4.  **Customer Resolution**: How effectively and efficiently was the customer's issue resolved?
-        * Sub-category 1: Issue Identification (0-10)
-        * Sub-category 2: Solution Effectiveness (0-10)
-        * Sub-category 3: Time to Resolution (0-10)
-        * Sub-category 4: Follow-up & Next Steps (0-10)
-
-    Provide the output as a JSON object with the following structure. If a category or sub-category is not applicable or cannot be determined, return 0 for its score.
-
-    {{
-        "customer_engagement": {{
-            "score": [0-10],
-            "active_listening": [0-10],
-            "probing_questions": [0-10],
-            "empathy_understanding": [0-10],
-            "clarity_conciseness": [0-10]
-        }},
-        "politeness": {{
-            "score": [0-10],
-            "greeting_closing": [0-10],
-            "tone_demeanor": [0-10],
-            "respectful_language": [0-10],
-            "handling_interruptions": [0-10]
-        }},
-        "professional_knowledge": {{
-            "score": [0-10],
-            "product_service_info": [0-10],
-            "policy_adherence": [0-10],
-            "problem_diagnosis": [0-10],
-            "solution_offering": [0-10]
-        }},
-        "customer_resolution": {{
-            "score": [0-10],
-            "issue_identification": [0-10],
-            "solution_effectiveness": [0-10],
-            "time_to_resolution": [0-10],
-            "follow_up_next_steps": [0-10]
-        }},
-        "overall_score": [0-10]
-    }}
-
-    Transcript:
-    {transcript}
-    """
+    log_with_timestamp(f"Starting OpenAI analysis for OID {oid} (transcript length: {len(transcript)} chars)")
     
     try:
-        log_with_timestamp("Analyzing transcription with OpenAI...")
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        # Simplified prompt to reduce complexity
+        prompt = f"""Rate this customer service call transcript from 1-10 in these areas:
+
+1. Customer Engagement (how well agent engaged with customer)
+2. Politeness (how polite and courteous the agent was)  
+3. Professional Knowledge (agent's product/service knowledge)
+4. Customer Resolution (how well the issue was resolved)
+
+Return ONLY a JSON object with this exact structure:
+{{
+    "customer_engagement": {{
+        "score": 7,
+        "active_listening": 7,
+        "probing_questions": 6,
+        "empathy_understanding": 8,
+        "clarity_conciseness": 7
+    }},
+    "politeness": {{
+        "score": 8,
+        "greeting_closing": 9,
+        "tone_demeanor": 8,
+        "respectful_language": 8,
+        "handling_interruptions": 7
+    }},
+    "professional_knowledge": {{
+        "score": 6,
+        "product_service_info": 6,
+        "policy_adherence": 7,
+        "problem_diagnosis": 5,
+        "solution_offering": 6
+    }},
+    "customer_resolution": {{
+        "score": 7,
+        "issue_identification": 8,
+        "solution_effectiveness": 6,
+        "time_to_resolution": 7,
+        "follow_up_next_steps": 6
+    }},
+    "overall_score": 7
+}}
+
+Transcript: {transcript}"""
+        
+        log_with_timestamp(f"Sending request to OpenAI for OID {oid}...")
+        
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a customer service call analyzer. Rate the agent's performance based on the transcript."},
+                {"role": "system", "content": "You are a customer service quality analyzer. Always return valid JSON with numeric scores 1-10."},
                 {"role": "user", "content": prompt}
             ],
-            response_format={ "type": "json_object" }
+            response_format={"type": "json_object"},
+            max_tokens=500,
+            temperature=0.3
         )
         
-        analysis_json = json.loads(response.choices[0].message.content)
-        log_with_timestamp("OpenAI analysis complete")
+        raw_response = response.choices[0].message.content
+        log_with_timestamp(f"OpenAI raw response for OID {oid}: {raw_response[:200]}...")
+        
+        analysis_json = json.loads(raw_response)
+        
+        # Validate the response structure
+        required_keys = ['customer_engagement', 'politeness', 'professional_knowledge', 'customer_resolution', 'overall_score']
+        for key in required_keys:
+            if key not in analysis_json:
+                log_error(f"Missing key '{key}' in OpenAI response for OID {oid}")
+                return None
+        
+        # Ensure all scores are numbers
+        for category in ['customer_engagement', 'politeness', 'professional_knowledge', 'customer_resolution']:
+            if 'score' not in analysis_json[category]:
+                log_error(f"Missing 'score' in category '{category}' for OID {oid}")
+                return None
+            
+            # Convert all values to numbers
+            for subkey, value in analysis_json[category].items():
+                try:
+                    analysis_json[category][subkey] = float(value)
+                except (ValueError, TypeError):
+                    log_error(f"Invalid numeric value for {category}.{subkey}: {value} in OID {oid}")
+                    analysis_json[category][subkey] = 0.0
+        
+        try:
+            analysis_json['overall_score'] = float(analysis_json['overall_score'])
+        except (ValueError, TypeError):
+            analysis_json['overall_score'] = 0.0
+        
+        log_with_timestamp(f"✅ OpenAI analysis successful for OID {oid} - Overall: {analysis_json['overall_score']}")
         return analysis_json
         
-    except Exception as e:
-        log_error("OpenAI analysis failed", e)
+    except json.JSONDecodeError as e:
+        log_error(f"JSON decode error for OID {oid}", e)
+        log_with_timestamp(f"Raw response was: {raw_response if 'raw_response' in locals() else 'No response captured'}")
         return None
+    except Exception as e:
+        log_error(f"OpenAI API error for OID {oid}", e)
+        return None
+
+def test_openai_connection() -> bool:
+    """Test OpenAI API connection with a simple request"""
+    if not OPENAI_AVAILABLE or not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
+        return False
+    
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Return JSON: {\"test\": 5}"}],
+            response_format={"type": "json_object"},
+            max_tokens=50
+        )
+        result = json.loads(response.choices[0].message.content)
+        return 'test' in result and result['test'] == 5
+    except Exception as e:
+        log_error("OpenAI connection test failed", e)
+        return False
 
 def categorize_call(transcript: str) -> str:
     """Categorize calls based on keywords in the transcript."""
@@ -580,12 +641,15 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     cursor.execute('''
                         INSERT INTO calls (
                             oid, call_datetime, agent_name, phone_number, call_direction, 
-                            duration_seconds, status, user_id, category, processed_at, raw_communication_data
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            duration_seconds, status, user_id, category, processed_at, 
+                            processing_error, raw_communication_data
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
                         xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                        xelion_metadata['user_id'], call_category, datetime.now().isoformat(), raw_data
+                        xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
+                        None,  # processing_error - None for no audio case
+                        raw_data
                     ))
                     conn.commit()
                     log_with_timestamp(f"Stored OID {oid} (Missed/No Audio) in DB")
@@ -616,10 +680,10 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             return None
 
         # 4. Analyze Transcription with OpenAI
-        openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'])
+        openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
         if not openai_analysis:
-            log_with_timestamp(f"OpenAI analysis failed for OID {oid}. Storing partial data", "WARN")
-            openai_analysis = {}
+            log_with_timestamp(f"⚠️ OpenAI analysis failed for OID {oid}. Storing partial data", "WARN")
+            openai_analysis = {}  # Will result in all 0 scores
 
         # 5. Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
@@ -792,11 +856,14 @@ def index():
 @app.route('/status')
 def get_status():
     """Get detailed status information"""
+    openai_test_result = test_openai_connection()
     return jsonify({
         "background_running": background_process_running,
         "processing_stats": processing_stats,
         "deepgram_available": DEEPGRAM_SDK_AVAILABLE,
         "openai_available": OPENAI_AVAILABLE,
+        "openai_connection_test": openai_test_result,
+        "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
         "last_poll": processing_stats.get('last_poll_time', 'Never'),
         "last_error": processing_stats.get('last_error', 'None')
     })
@@ -939,8 +1006,20 @@ def get_dashboard_data():
             "processing_stats": processing_stats
         })
 
-@app.route('/get_recent_calls')
-def get_recent_calls():
+@app.route('/test_openai')
+def test_openai_endpoint():
+    """Test OpenAI analysis with a sample transcript"""
+    sample_transcript = "Hello, thank you for calling our support. How can I help you today? The customer explained their issue with their account, and I was able to resolve it by resetting their password. Is there anything else I can help you with? Thank you for calling, have a great day!"
+    
+    log_with_timestamp("Testing OpenAI analysis with sample transcript...")
+    result = analyze_transcription_with_openai(sample_transcript, "TEST_OID")
+    
+    return jsonify({
+        "openai_test_successful": result is not None,
+        "sample_analysis": result,
+        "openai_available": OPENAI_AVAILABLE,
+        "api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'
+    })
     """Get recent calls for debugging"""
     with db_lock:
         conn = get_db_connection()
@@ -956,6 +1035,109 @@ def get_recent_calls():
         conn.close()
         
         return jsonify({"recent_calls": calls})
+
+@app.route('/get_recent_calls')
+def get_recent_calls():
+    """Get recent calls for debugging"""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT oid, call_datetime, status, category, agent_name, phone_number, 
+                   transcription_text, processed_at, processing_error,
+                   openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score
+            FROM calls 
+            ORDER BY processed_at DESC 
+            LIMIT 20
+        """)
+        calls = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        
+        return jsonify({"recent_calls": calls})
+    init_db()
+    return "Database initialization attempted (check logs for details)."
+
+@app.route('/reprocess_zero_scores')
+def reprocess_zero_scores():
+    """Reprocess calls that have zero OpenAI scores"""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Find calls with transcriptions but zero OpenAI scores
+        cursor.execute("""
+            SELECT oid, transcription_text FROM calls 
+            WHERE transcription_text IS NOT NULL 
+            AND transcription_text != ''
+            AND (openai_overall_score = 0 OR openai_overall_score IS NULL)
+            LIMIT 10
+        """)
+        
+        calls_to_reprocess = cursor.fetchall()
+        conn.close()
+        
+        if not calls_to_reprocess:
+            return jsonify({"message": "No calls with zero scores found", "reprocessed": 0})
+        
+        reprocessed_count = 0
+        
+        for call in calls_to_reprocess:
+            oid, transcript = call
+            log_with_timestamp(f"Reprocessing OpenAI analysis for OID {oid}")
+            
+            analysis = analyze_transcription_with_openai(transcript, oid)
+            
+            if analysis:
+                with db_lock:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE calls SET 
+                        openai_engagement = ?, openai_politeness = ?, openai_professionalism = ?, 
+                        openai_resolution = ?, openai_overall_score = ?,
+                        engagement_sub1 = ?, engagement_sub2 = ?, engagement_sub3 = ?, engagement_sub4 = ?,
+                        politeness_sub1 = ?, politeness_sub2 = ?, politeness_sub3 = ?, politeness_sub4 = ?,
+                        professionalism_sub1 = ?, professionalism_sub2 = ?, professionalism_sub3 = ?, professionalism_sub4 = ?,
+                        resolution_sub1 = ?, resolution_sub2 = ?, resolution_sub3 = ?, resolution_sub4 = ?
+                        WHERE oid = ?
+                    """, (
+                        analysis.get('customer_engagement', {}).get('score', 0),
+                        analysis.get('politeness', {}).get('score', 0),
+                        analysis.get('professional_knowledge', {}).get('score', 0),
+                        analysis.get('customer_resolution', {}).get('score', 0),
+                        analysis.get('overall_score', 0),
+                        analysis.get('customer_engagement', {}).get('active_listening', 0),
+                        analysis.get('customer_engagement', {}).get('probing_questions', 0),
+                        analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
+                        analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
+                        analysis.get('politeness', {}).get('greeting_closing', 0),
+                        analysis.get('politeness', {}).get('tone_demeanor', 0),
+                        analysis.get('politeness', {}).get('respectful_language', 0),
+                        analysis.get('politeness', {}).get('handling_interruptions', 0),
+                        analysis.get('professional_knowledge', {}).get('product_service_info', 0),
+                        analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
+                        analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
+                        analysis.get('professional_knowledge', {}).get('solution_offering', 0),
+                        analysis.get('customer_resolution', {}).get('issue_identification', 0),
+                        analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
+                        analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
+                        analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                        oid
+                    ))
+                    conn.commit()
+                    conn.close()
+                    reprocessed_count += 1
+                    log_with_timestamp(f"✅ Successfully reprocessed OID {oid}")
+            else:
+                log_with_timestamp(f"❌ Failed to reprocess OID {oid}")
+        
+        return jsonify({
+            "message": f"Reprocessed {reprocessed_count} out of {len(calls_to_reprocess)} calls",
+            "reprocessed": reprocessed_count,
+            "total_found": len(calls_to_reprocess)
+        })
+    init_db()
+    return "Database initialization attempted (check logs for details)."
 
 @app.route('/init_db_manual')
 def init_db_manual():
