@@ -24,13 +24,6 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
-app = Flask(__name__)
-
-# --- Database Initialization Call (Moved Here) ---
-# This ensures init_db() runs as soon as the app object is created and the module is loaded.
-# This is crucial for Gunicorn/production environments where __name__ == '__main__' might not execute.
-init_db() # Call init_db immediately after app creation
-
 # --- Configuration ---
 # Xelion API (Replace with your actual Xelion details)
 XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1/wasteking')
@@ -63,7 +56,12 @@ login_lock = threading.Lock()
 db_lock = threading.Lock()
 transcription_lock = threading.Lock()
 
-# --- Database Initialization Function ---
+# --- Database Initialization Function (Moved Above App Creation) ---
+def get_db_connection():
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
     print("Attempting to initialize database...")
     try:
@@ -107,11 +105,12 @@ def init_db():
     except Exception as e:
         print(f"An unexpected error occurred during database initialization: {e}")
 
+app = Flask(__name__)
 
-def get_db_connection():
-    conn = sqlite3.connect(DATABASE_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+# --- Database Initialization Call (Now below function definition) ---
+# This ensures init_db() runs as soon as the app object is created and the module is loaded.
+init_db() # Call init_db immediately after app creation
+
 
 # --- Xelion API Functions ---
 def xelion_login():
@@ -349,7 +348,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             return None
         
         duration_minutes = duration_seconds / 60
-        cost_usd = duration_minutes * DEEPgram_PRICE_PER_MINUTE
+        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
         cost_gbp = cost_usd * USD_TO_GBP_RATE
         word_count = len(transcript_text.split())
 
