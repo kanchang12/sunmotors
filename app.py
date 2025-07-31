@@ -60,40 +60,48 @@ transcription_lock = threading.Lock()
 
 # --- Database Initialization ---
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS calls (
-            oid TEXT PRIMARY KEY,
-            call_datetime TEXT,
-            agent_name TEXT,
-            phone_number TEXT,
-            call_direction TEXT,
-            duration_seconds REAL,
-            status TEXT,
-            user_id TEXT,
-            transcription_text TEXT,
-            transcribed_duration_minutes REAL,
-            deepgram_cost_usd REAL,
-            deepgram_cost_gbp REAL,
-            word_count INTEGER,
-            confidence REAL,
-            language TEXT,
-            openai_engagement REAL,
-            openai_politeness REAL,
-            openai_professionalism REAL,
-            openai_resolution REAL,
-            openai_overall_score REAL,
-            category TEXT,
-            engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
-            politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
-            professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
-            resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
-            processed_at TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    print("Attempting to initialize database...")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS calls (
+                oid TEXT PRIMARY KEY,
+                call_datetime TEXT,
+                agent_name TEXT,
+                phone_number TEXT,
+                call_direction TEXT,
+                duration_seconds REAL,
+                status TEXT,
+                user_id TEXT,
+                transcription_text TEXT,
+                transcribed_duration_minutes REAL,
+                deepgram_cost_usd REAL,
+                deepgram_cost_gbp REAL,
+                word_count INTEGER,
+                confidence REAL,
+                language TEXT,
+                openai_engagement REAL,
+                openai_politeness REAL,
+                openai_professionalism REAL,
+                openai_resolution REAL,
+                openai_overall_score REAL,
+                category TEXT,
+                engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
+                politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
+                professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
+                resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
+                processed_at TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print("Database initialized successfully (or already exists).")
+    except sqlite3.Error as e:
+        print(f"ERROR: Failed to initialize database: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred during database initialization: {e}")
+
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_FILE)
@@ -661,6 +669,11 @@ def fetch_and_transcribe_recent_calls():
             time.sleep(60) # Poll every 60 seconds
 
 # --- Flask Routes ---
+@app.before_first_request
+def startup_init():
+    """Ensure database is initialized before handling first request."""
+    init_db()
+
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -791,12 +804,14 @@ def get_dashboard_data():
             "category_call_ratings": category_ratings
         })
 
-if __name__ == '__main__':
+# New route to manually initialize DB, useful for debugging deployments
+@app.route('/init_db_manual')
+def init_db_manual():
     init_db()
-    # For Koyeb deployment with Gunicorn, you would typically not run app.run() here.
-    # Gunicorn handles starting the Flask application.
-    # The background thread for fetching calls can be initiated via a startup script
-    # or a separate worker process on Koyeb if real-time polling is desired.
-    # For local testing:
-    # threading.Thread(target=fetch_and_transcribe_recent_calls, daemon=True).start()
+    return "Database initialization attempted (check logs for details)."
+
+if __name__ == '__main__':
+    # When running locally, this ensures init_db is called.
+    # For Gunicorn/Koyeb, @app.before_first_request is more reliable.
+    init_db() 
     app.run(debug=True, host='0.0.0.0', port=5000)
