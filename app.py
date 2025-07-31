@@ -30,7 +30,8 @@ XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1
 XELION_USERNAME = os.getenv('XELION_USERNAME', 'your_xelion_username')
 XELION_PASSWORD = os.getenv('XELION_PASSWORD', 'your_xelion_password')
 XELION_APP_KEY = os.getenv('XELION_APP_KEY', 'your_xelion_app_key')
-# Removed XELION_USERSPACE as per user's request
+# Re-adding XELION_USERSPACE based on user's working script
+XELION_USERSPACE = os.getenv('XELION_USERSPACE', 'transcriber-abi-housego') # Default or derive as in fetch_audio.py
 
 # Deepgram API
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
@@ -113,7 +114,7 @@ init_db() # Call init_db immediately after app creation
 
 
 # --- Xelion API Functions ---
-def xelion_login():
+def xelion_login() -> bool:
     global session_token
     with login_lock:
         if session_token:
@@ -124,14 +125,15 @@ def xelion_login():
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
         
-        # Removed userSpace from the payload as per user's request
+        # Re-introducing userSpace based on fetch_audio.py
         data_payload = { 
             "userName": XELION_USERNAME, 
             "password": XELION_PASSWORD,
+            "userSpace": XELION_USERSPACE, # Re-added
             "appKey": XELION_APP_KEY
         }
         
-        print(f"🔐 Attempting Xelion login for {XELION_USERNAME}")
+        print(f"🔐 Attempting Xelion login for {XELION_USERNAME} with userSpace: {XELION_USERSPACE}")
         try:
             response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload))
             response.raise_for_status() 
@@ -143,6 +145,9 @@ def xelion_login():
             return True
         except requests.exceptions.RequestException as e:
             print(f"❌ Failed to log in to Xelion: {e}")
+            if response.status_code:
+                print(f"HTTP Status Code: {response.status_code}")
+                print(f"Response Body: {response.text}")
             session_token = None
             return False
 
@@ -155,6 +160,7 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
 
     communications_url = f"{XELION_BASE_URL.rstrip('/')}/communications"
     try:
+        print(f"➡️ Fetching communications from: {communications_url} with params: {params}")
         response = xelion_session.get(communications_url, params=params, timeout=30) 
         response.raise_for_status()
         
@@ -165,10 +171,14 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
         if 'meta' in data and 'paging' in data['meta']:
             next_before_oid = data['meta']['paging'].get('previousId')
         
+        print(f"✔️ Successfully fetched {len(communications)} communications.")
         return communications, next_before_oid
             
     except requests.exceptions.RequestException as e:
         print(f"❌ Failed to fetch communications: {e}")
+        if response.status_code:
+            print(f"HTTP Status Code: {response.status_code}")
+            print(f"Response Body: {response.text}")
         # If token expires, try to re-login
         if "401 Unauthorized" in str(e) and xelion_login():
             print("Attempting re-login and re-fetch...")
@@ -180,9 +190,13 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
                 next_before_oid = None
                 if 'meta' in data and 'paging' in data['meta']:
                     next_before_oid = data['meta']['paging'].get('previousId')
+                print(f"✔️ Successfully re-fetched {len(communications)} communications after re-login.")
                 return communications, next_before_oid
             except requests.exceptions.RequestException as re:
                 print(f"❌ Re-fetch after re-login failed: {re}")
+                if response.status_code:
+                    print(f"HTTP Status Code: {response.status_code}")
+                    print(f"Response Body: {response.text}")
                 return [], None
         return [], None
 
@@ -242,6 +256,7 @@ def download_audio(communication_oid: str) -> Optional[str]:
         return file_path
     
     try:
+        print(f"⬇️ Attempting to download audio for OID {communication_oid} from {audio_url}")
         response = xelion_session.get(audio_url, timeout=60) 
         if response.status_code == 200:
             with open(file_path, 'wb') as f:
@@ -249,10 +264,10 @@ def download_audio(communication_oid: str) -> Optional[str]:
             print(f"⬇️ Downloaded audio for OID {communication_oid}")
             return file_path
         elif response.status_code == 404:
-            print(f"❌ No audio found for OID {communication_oid}")
+            print(f"❌ No audio found for OID {communication_oid} (404 Not Found).")
             return None
         else:
-            print(f"❌ Failed to download audio for {communication_oid}: {response.status_code}")
+            print(f"❌ Failed to download audio for {communication_oid}: HTTP {response.status_code} - {response.text}")
             return None
             
     except requests.exceptions.RequestException as e:
@@ -280,6 +295,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
                     model="nova-2", smart_format=True, punctuate=True,
                     diarize=True, utterances=True, language="en-GB"
                 )
+                print(f"🎤 Transcribing OID {oid} using Deepgram SDK...")
                 with open(audio_file_path, 'rb') as audio_file:
                     payload = FileSource(audio_file.read())
                 response = deepgram_client.listen.prerecorded.v("1").transcribe_file(payload, options)
@@ -300,6 +316,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
                 params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
                           "diarize": "true", "utterances": "true", "language": "en-GB"}
                 
+                print(f"🎤 Transcribing OID {oid} using Deepgram direct API (fallback)...")
                 with open(audio_file_path, 'rb') as audio_file:
                     response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
                 
@@ -323,6 +340,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
                       "diarize": "true", "utterances": "true", "language": "en-GB"}
             
+            print(f"🎤 Transcribing OID {oid} using Deepgram direct API...")
             with open(audio_file_path, 'rb') as audio_file:
                 response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
             
@@ -435,6 +453,7 @@ def analyze_transcription_with_openai(transcript: str) -> Optional[Dict]:
     """
     
     try:
+        print("🧠 Analyzing transcription with OpenAI...")
         response = client.chat.completions.create(
             model="gpt-4o-mini", # Using a more cost-effective model
             messages=[
@@ -445,6 +464,7 @@ def analyze_transcription_with_openai(transcript: str) -> Optional[Dict]:
         )
         
         analysis_json = json.loads(response.choices[0].message.content)
+        print("✅ OpenAI analysis complete.")
         return analysis_json
         
     except Exception as e:
@@ -643,6 +663,8 @@ def fetch_and_transcribe_recent_calls():
             
             if not comms:
                 print("No new communications found in this poll.")
+            else:
+                print(f"Found {len(comms)} communications to process.")
             
             futures = []
             for comm in comms:
@@ -653,6 +675,9 @@ def fetch_and_transcribe_recent_calls():
                 if oid and status in ['finished', 'missed', 'cancelled'] and oid not in processed_oids:
                     futures.append(executor.submit(process_single_call, comm))
                     processed_oids.add(oid) # Add to set as soon as submitted
+                elif oid:
+                    print(f"Skipping OID {oid} (status: {status} or already processed).")
+
 
             for future in as_completed(futures):
                 result_oid = future.result()
@@ -678,6 +703,7 @@ def index():
 def trigger_fetch_and_transcribe():
     # Start the background process if not already running
     # This is a simplification. In a production app, you'd check if a thread is active.
+    print("Received request to /fetch_and_transcribe. Initiating background thread...")
     thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
     thread.daemon = True  # Allows the thread to exit when the main program exits
     thread.start()
@@ -808,5 +834,7 @@ def init_db_manual():
 
 if __name__ == '__main__':
     # This block is primarily for local execution.
-    # The init_db() call above (after app = Flask(__name__)) handles Gunicorn.
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # When deployed with Gunicorn, this block is typically not executed.
+    # Gunicorn handles the port binding in production, often using the PORT environment variable.
+    port = int(os.environ.get("PORT", 5000)) # Use PORT env var if available, else default to 5000
+    app.run(debug=True, host='0.0.0.0', port=port)
