@@ -26,6 +26,11 @@ except ImportError:
 
 app = Flask(__name__)
 
+# --- Database Initialization Call (Moved Here) ---
+# This ensures init_db() runs as soon as the app object is created and the module is loaded.
+# This is crucial for Gunicorn/production environments where __name__ == '__main__' might not execute.
+init_db() # Call init_db immediately after app creation
+
 # --- Configuration ---
 # Xelion API (Replace with your actual Xelion details)
 XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1/wasteking')
@@ -58,7 +63,7 @@ login_lock = threading.Lock()
 db_lock = threading.Lock()
 transcription_lock = threading.Lock()
 
-# --- Database Initialization ---
+# --- Database Initialization Function ---
 def init_db():
     print("Attempting to initialize database...")
     try:
@@ -344,7 +349,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             return None
         
         duration_minutes = duration_seconds / 60
-        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
+        cost_usd = duration_minutes * DEEPgram_PRICE_PER_MINUTE
         cost_gbp = cost_usd * USD_TO_GBP_RATE
         word_count = len(transcript_text.split())
 
@@ -669,11 +674,6 @@ def fetch_and_transcribe_recent_calls():
             time.sleep(60) # Poll every 60 seconds
 
 # --- Flask Routes ---
-
-# No longer using @app.before_first_request due to deprecation/removal in newer Flask versions.
-# Database initialization will be handled by the direct call in __name__ == '__main__' or
-# by an explicit call if using a WSGI server like Gunicorn.
-
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -811,12 +811,6 @@ def init_db_manual():
     return "Database initialization attempted (check logs for details)."
 
 if __name__ == '__main__':
-    # Initialize the database when the script is run directly.
-    # When deployed with Gunicorn, this block might not always run in the context
-    # you expect for table creation, but it's crucial for local development.
-    # For production deployments with Gunicorn and ephemeral filesystems,
-    # consider setting up a custom entrypoint (e.g., in a Procfile)
-    # that runs `python -c "from app import init_db; init_db()"`
-    # before starting gunicorn, or using a persistent volume if possible.
-    init_db() 
+    # This block is primarily for local execution.
+    # The init_db() call above (after app = Flask(__name__)) handles Gunicorn.
     app.run(debug=True, host='0.0.0.0', port=5000)
