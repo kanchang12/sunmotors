@@ -32,6 +32,7 @@ XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1
 XELION_USERNAME = os.getenv('XELION_USERNAME', 'your_xelion_username')
 XELION_PASSWORD = os.getenv('XELION_PASSWORD', 'your_xelion_password')
 XELION_APP_KEY = os.getenv('XELION_APP_KEY', 'your_xelion_app_key')
+XELION_USERSPACE = os.getenv('XELION_USERSPACE', 'your_xelion_userspace') # NEW: User Space as ENV variable
 
 # Deepgram API
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
@@ -111,8 +112,8 @@ def xelion_login():
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
         
-        # Determine userspace - simplified for this example
-        userspace = f"transcriber-{XELION_USERNAME.split('@')[0].replace('.', '-')}"
+        # Use XELION_USERSPACE from environment variable
+        userspace = XELION_USERSPACE 
 
         data_payload = { 
             "userName": XELION_USERNAME, 
@@ -121,7 +122,7 @@ def xelion_login():
             "appKey": XELION_APP_KEY
         }
         
-        print(f"🔐 Attempting Xelion login for {XELION_USERNAME}")
+        print(f"🔐 Attempting Xelion login for {XELION_USERNAME} with userspace: {userspace}")
         try:
             response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload))
             response.raise_for_status() 
@@ -640,8 +641,6 @@ def fetch_and_transcribe_recent_calls():
                 status = comm.get('object', {}).get('status', '').lower()
                 
                 # Process all calls that are 'finished', 'missed', or 'cancelled'
-                # Xelion's API returns all communication types. We'll attempt to download audio
-                # for these statuses, and the download_audio function will handle if no audio is present (404).
                 if oid and status in ['finished', 'missed', 'cancelled'] and oid not in processed_oids:
                     futures.append(executor.submit(process_single_call, comm))
                     processed_oids.add(oid) # Add to set as soon as submitted
