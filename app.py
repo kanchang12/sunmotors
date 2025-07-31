@@ -502,7 +502,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         cursor = conn.cursor()
         cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
         if cursor.fetchone():
-            print(f"Call OID {oid} already processed. Skipping.")
+            # No print statement for already processed OIDs
             conn.close()
             return None
         conn.close()
@@ -675,8 +675,7 @@ def fetch_and_transcribe_recent_calls():
                 if oid and status in ['finished', 'missed', 'cancelled'] and oid not in processed_oids:
                     futures.append(executor.submit(process_single_call, comm))
                     processed_oids.add(oid) # Add to set as soon as submitted
-                elif oid:
-                    print(f"Skipping OID {oid} (status: {status} or already processed).")
+                # The 'else' block with the print statement for skipping OIDs has been removed.
 
 
             for future in as_completed(futures):
