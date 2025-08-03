@@ -169,7 +169,6 @@ def init_db():
                 processed_at TEXT,
                 processing_error TEXT,
                 raw_communication_data TEXT,
-                summary_translation TEXT,
                 summary_translation TEXT
             )
         ''')
@@ -939,10 +938,6 @@ Transcript: {transcript}"""
         if 'summary' not in analysis_json:
             analysis_json['summary'] = "Summary not provided by AI analysis."
         
-        # Ensure summary exists
-        if 'summary' not in analysis_json:
-            analysis_json['summary'] = "Summary not provided by AI analysis."
-        
         log_with_timestamp(f"✅ OpenAI analysis successful for OID {oid} - Overall: {analysis_json['overall_score']}")
         return analysis_json
         
@@ -1020,7 +1015,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
                         xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
                         None,  # processing_error - None for no audio case
-                        raw_data, "No audio available for transcription", "No audio available for transcription"
+                        raw_data, "No audio available for transcription"
                     ))
                     conn.commit()
                     log_with_timestamp(f"Stored OID {oid} (Missed/No Audio) in DB")
@@ -1106,7 +1101,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
                     openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
                     None,  # processing_error - None for successful processing
-                    raw_data, openai_analysis.get('summary', 'No summary available'), openai_analysis.get('summary', 'No summary available')
+                    raw_data, openai_analysis.get('summary', 'No summary available')
                 ))
                 conn.commit()
                 log_with_timestamp(f"Successfully stored OID {oid} and analysis in DB")
@@ -1541,43 +1536,6 @@ def setup_wasteking_session():
             "timestamp": datetime.now().isoformat()
         }), 500
 
-@app.route('/get_calls_list')
-def get_calls_list():
-    """Get detailed list of calls with agent names, scores, and summaries"""
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT oid, call_datetime, agent_name, phone_number, category, 
-                   openai_overall_score, openai_engagement, openai_politeness, 
-                   openai_professionalism, openai_resolution, summary_translation,
-                   duration_seconds, status
-            FROM calls 
-            ORDER BY processed_at DESC 
-            LIMIT 100
-        """)
-        calls = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return jsonify({"calls": calls})
-
-# --- ElevenLabs Webhook Endpoints ---
-@app.route('/api/get-wasteking-prices', methods=['GET'])
-def elevenlabs_wasteking_webhook():
-    """ElevenLabs webhook endpoint for fetching WasteKing pricing data"""
-    log_with_timestamp("📞 ElevenLabs called WasteKing pricing endpoint")
-    
-    try:
-        # Fetch LIVE pricing data from WasteKing
-        result = get_wasteking_prices()
-        return jsonify(result)
-    except Exception as e:
-        log_error("Error in ElevenLabs WasteKing endpoint", e)
-        return jsonify({
-            "error": "Internal server error",
-            "status": "error",
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
 @app.route('/test_openai')
 def test_openai_endpoint():
     """Test OpenAI analysis with a sample transcript"""
@@ -1617,6 +1575,77 @@ def get_recent_calls():
 def init_db_manual():
     init_db()
     return "Database initialization attempted (check logs for details)."
+
+@app.route('/reset_database')
+def reset_database():
+    """Delete and recreate the database with fixed schema"""
+    global background_process_running
+    
+    # Stop background process if running
+    if background_process_running:
+        background_process_running = False
+        time.sleep(2)  # Give it time to stop
+    
+    try:
+        # Delete the database file
+        if os.path.exists(DATABASE_FILE):
+            os.remove(DATABASE_FILE)
+            log_with_timestamp(f"Deleted existing database file: {DATABASE_FILE}")
+        
+        # Recreate with fixed schema
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS calls (
+                oid TEXT PRIMARY KEY,
+                call_datetime TEXT,
+                agent_name TEXT,
+                phone_number TEXT,
+                call_direction TEXT,
+                duration_seconds REAL,
+                status TEXT,
+                user_id TEXT,
+                transcription_text TEXT,
+                transcribed_duration_minutes REAL,
+                deepgram_cost_usd REAL,
+                deepgram_cost_gbp REAL,
+                word_count INTEGER,
+                confidence REAL,
+                language TEXT,
+                openai_engagement REAL,
+                openai_politeness REAL,
+                openai_professionalism REAL,
+                openai_resolution REAL,
+                openai_overall_score REAL,
+                category TEXT,
+                engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
+                politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
+                professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
+                resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
+                processed_at TEXT,
+                processing_error TEXT,
+                raw_communication_data TEXT,
+                summary_translation TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        
+        log_with_timestamp("✅ Database recreated successfully with fixed schema")
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database deleted and recreated successfully!",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        log_error("Failed to reset database", e)
+        return jsonify({
+            "status": "error",
+            "message": f"Database reset failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route('/reprocess_zero_scores')
 def reprocess_zero_scores():
