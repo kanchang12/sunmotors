@@ -1,6 +1,23 @@
-Flask
-requests
-twilio
-gunicorn
-python-dotenv
-openai
+Flask==2.3.3
+requests==2.31.0
+selenium==4.15.2
+webdriver-manager==4.0.1
+beautifulsoup4==4.12.2
+lxml==4.9.3
+html5lib==1.1
+
+# Optional dependencies (install if available)
+deepgram-sdk>=3.0.0
+openai>=1.0.0
+
+# Web scraping and automation
+urllib3==2.0.7
+certifi==2023.7.22
+
+# Data processing
+pandas==2.1.4
+numpy==1.24.4
+
+# Additional utilities
+python-dotenv==1.0.0
+gunicorn==21.2.0
