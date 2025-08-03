@@ -1566,6 +1566,7 @@ def elevenlabs_wasteking_webhook():
     log_with_timestamp("📞 ElevenLabs called WasteKing pricing endpoint")
     
     try:
+        # Fetch LIVE pricing data from WasteKing
         result = get_wasteking_prices()
         return jsonify(result)
     except Exception as e:
