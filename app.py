@@ -9,8 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Dict, List, Tuple
 from flask import Flask, jsonify, render_template, request
 
-# --- Dummy/Mock Setup (Replace with your actual configuration) ---
-# Assuming these are set via environment variables or a config file
+# --- Configuration variables (set via environment or hardcoded) ---
 XELION_BASE_URL = os.environ.get("XELION_BASE_URL")
 XELION_USERNAME = os.environ.get("XELION_USERNAME")
 XELION_PASSWORD = os.environ.get("XELION_PASSWORD")
@@ -18,11 +17,10 @@ XELION_USERSPACE = os.environ.get("XELION_USERSPACE")
 XELION_APP_KEY = os.environ.get("XELION_APP_KEY")
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-WASTEKING_PRICING_URL = os.environ.get("WASTEKING_PRICING_URL")
 
 OPENAI_AVAILABLE = bool(OPENAI_API_KEY)
-DEEPGRAM_SDK_AVAILABLE = True  # Assuming SDK is installed
-SELENIUM_AVAILABLE = False  # Assuming Selenium is not used for this version
+DEEPGRAM_SDK_AVAILABLE = True
+SELENIUM_AVAILABLE = False
 
 if DEEPGRAM_SDK_AVAILABLE:
     try:
@@ -135,13 +133,36 @@ def log_error(message, exception=None):
     if exception:
         print(f"Exception details: {exception}")
         
-def load_wasteking_session():
-    # Placeholder for loading a session
+# --- FIX: This is a placeholder function. You must replace the body of this
+#          function with your actual authentication logic to get a valid session object.
+#          It should return a requests.Session() object with authentication headers/cookies.
+def authenticate_wasteking() -> requests.Session:
+    """Placeholder for authenticating with the WasteKing system.
+       THIS MUST BE REPLACED WITH YOUR OWN CODE.
+    """
+    log_with_timestamp("⚠️ WARNING: Using placeholder authentication for WasteKing. THIS IS INTENTIONAL. Please replace this function with your actual authentication logic.")
+    # Example placeholder:
+    # session = requests.Session()
+    # login_data = {'username': 'your_user', 'password': 'your_pass'}
+    # session.post('https://login.wasteking.com/login', data=login_data)
+    # return session
     return requests.Session()
-
-def authenticate_wasteking():
-    # Placeholder for authentication
-    return requests.Session()
+    
+# --- FIX: This function has also been updated. It should be used to check if
+#          a session is still valid. You must replace the body of this
+#          function to check the session validity.
+def load_wasteking_session() -> Optional[requests.Session]:
+    """Placeholder for loading a valid and current WasteKing session.
+       THIS MUST BE REPLACED WITH YOUR OWN CODE.
+    """
+    log_with_timestamp("⚠️ WARNING: Using placeholder session loading for WasteKing. THIS IS INTENTIONAL. Please replace this function with your actual session loading/validation logic.")
+    # Example placeholder:
+    # global wasteking_session
+    # if wasteking_session and is_session_valid(wasteking_session):
+    #     return wasteking_session
+    # else:
+    #     return None
+    return requests.Session() # Returns an unauthenticated session for now
 
 def test_openai_connection():
     if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
@@ -156,11 +177,16 @@ def test_openai_connection():
 
 # --- Part 1 and 2 functions ---
 def get_wasteking_prices():
-    """FIXED: Better error handling and includes actual data scraping from HTML"""
+    """FIXED: The URL is hardcoded here and the authentication logic is a placeholder.
+       The function now correctly attempts to use the session provided by the `authenticate_wasteking` function.
+    """
+    # This URL should be the correct one for your WasteKing prices page
+    wasteking_pricing_url = "https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app/wasteking-prices"
+
     try:
         log_with_timestamp("💰 Fetching WasteKing prices...")
         session = load_wasteking_session()
-        if not session:
+        if not session or not hasattr(session, 'headers') or 'Authorization' not in session.headers:
             log_with_timestamp("No valid WasteKing session, attempting auto-authentication...")
             auth_result = authenticate_wasteking()
             if isinstance(auth_result, dict) and "error" in auth_result:
@@ -177,7 +203,7 @@ def get_wasteking_prices():
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = session.get(WASTEKING_PRICING_URL, timeout=15)
+                response = session.get(wasteking_pricing_url, timeout=15)
                 response.raise_for_status()
                 if response.status_code == 200:
                     log_with_timestamp("✅ Successfully fetched pricing page. Starting to scrape...")
@@ -429,7 +455,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
                     'language': metadata.get('language', 'en-GB'),
                     'transcribed_duration_minutes': deepgram_duration / 60,
                     'deepgram_cost_usd': deepgram_cost_usd,
-                    'deepgram_cost_gbp': deepgram_cost_usd * 0.8  # Assuming a conversion rate
+                    'deepgram_cost_gbp': deepgram_cost_usd * 0.8
                 }
                 log_with_timestamp(f"✅ Transcription for OID {oid} complete. Cost: ${transcription_result['deepgram_cost_usd']:.4f}")
                 return transcription_result
@@ -784,7 +810,7 @@ def fetch_and_transcribe_recent_calls():
                     log_with_timestamp("📭 No NEW calls to process")
 
                 log_with_timestamp(f"📊 Session Stats - Processed: {processing_stats['total_processed']}, Errors: {processing_stats['total_errors']}")
-                time.sleep(30)  # Check every 30 seconds
+                time.sleep(30)
                 
             except Exception as e:
                 log_error("Error in monitoring loop", e)
@@ -795,22 +821,17 @@ def fetch_and_transcribe_recent_calls():
 
 # --- Flask Routes ---
 app = Flask(__name__)
+
+# --- FIX: Start the background process here, outside of __main__ ---
+# This ensures it runs regardless of how the app is started
 init_db()
+background_thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
+background_thread.daemon = True
+background_thread.start()
+log_with_timestamp("✅ Call monitoring auto-started")
 
 @app.route('/')
 def index():
-    """Auto-start background process when accessing root"""
-    global background_process_running, background_thread
-    
-    if not background_process_running:
-        log_with_timestamp("🚀 AUTO-STARTING call monitoring from root route")
-        background_thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
-        background_thread.daemon = True
-        background_thread.start()
-        log_with_timestamp("✅ Call monitoring auto-started")
-    else:
-        log_with_timestamp("ℹ️ Call monitoring already running")
-    
     return render_template('index.html')
 
 @app.route('/status')
