@@ -6,10 +6,20 @@ import sqlite3
 import threading
 import time
 import traceback
+import pickle
 from datetime import datetime, timedelta
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
+import re
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 
 # Attempt Deepgram SDK import
 try:
@@ -39,12 +49,22 @@ DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
 # OpenAI API (Replace with your actual OpenAI API Key)
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 
+# WasteKing API Configuration
+WASTEKING_EMAIL = os.getenv('WASTEKING_EMAIL', 'kanchan.ghosh@wasteking.co.uk')
+WASTEKING_PASSWORD = os.getenv('WASTEKING_PASSWORD', 'T^269725365789ad')
+WASTEKING_BASE_URL = "https://wasteking-suppliermarketplace-dev.azurewebsites.net"
+WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-breakdown/"
+
 # Database configuration
 DATABASE_FILE = 'calls.db'
 
 # Directory for temporary audio files
 AUDIO_TEMP_DIR = 'temp_audio'
 os.makedirs(AUDIO_TEMP_DIR, exist_ok=True)
+
+# Session files
+WASTEKING_COOKIES_FILE = "wasteking_session.pkl"
+SESSION_TIMEOUT_DAYS = 30
 
 # Deepgram pricing and currency conversion
 DEEPGRAM_PRICE_PER_MINUTE = 0.0043  # $0.0043 per minute for Nova-2 model
@@ -148,7 +168,9 @@ def init_db():
                 resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
                 processed_at TEXT,
                 processing_error TEXT,
-                raw_communication_data TEXT
+                raw_communication_data TEXT,
+                summary_translation TEXT,
+                summary_translation TEXT
             )
         ''')
         conn.commit()
@@ -173,6 +195,306 @@ if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_ke
     log_with_timestamp(f"OpenAI connection test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
 else:
     log_with_timestamp("⚠️ OpenAI not properly configured - analysis will fail!")
+
+# --- WasteKing Session Management ---
+def save_wasteking_session(session):
+    """Save authenticated WasteKing session for 30 days"""
+    try:
+        session_data = {
+            'cookies': session.cookies.get_dict(),
+            'timestamp': datetime.now(),
+            'headers': dict(session.headers)
+        }
+        
+        with open(WASTEKING_COOKIES_FILE, 'wb') as f:
+            pickle.dump(session_data, f)
+        
+        log_with_timestamp("✅ WasteKing session saved for 30 days")
+        return True
+    except Exception as e:
+        log_error("Failed to save WasteKing session", e)
+        return False
+
+def load_wasteking_session():
+    """Load saved WasteKing session if still valid"""
+    try:
+        if not os.path.exists(WASTEKING_COOKIES_FILE):
+            log_with_timestamp("No saved WasteKing session found")
+            return None
+        
+        with open(WASTEKING_COOKIES_FILE, 'rb') as f:
+            session_data = pickle.load(f)
+        
+        # Check if session expired (30 days)
+        age = datetime.now() - session_data['timestamp']
+        if age > timedelta(days=SESSION_TIMEOUT_DAYS):
+            log_with_timestamp(f"WasteKing session expired ({age.days} days old)")
+            return None
+        
+        # Create session with saved cookies
+        session = requests.Session()
+        session.cookies.update(session_data['cookies'])
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json, text/html, */*',
+            'Accept-Language': 'en-US,en;q=0.9'
+        })
+        
+        log_with_timestamp(f"✅ WasteKing session loaded ({age.days} days old)")
+        return session
+        
+    except Exception as e:
+        log_error("Failed to load WasteKing session", e)
+        return None
+
+def authenticate_wasteking():
+    """Authenticate and save 30-day WasteKing session"""
+    
+    log_with_timestamp("🔐 Starting WasteKing authentication...")
+    
+    # Setup headless Chrome
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    
+    try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+    except Exception as e:
+        log_error("Failed to setup Chrome for WasteKing auth", e)
+        return None
+    
+    try:
+        log_with_timestamp("🌐 Navigating to WasteKing...")
+        driver.get(WASTEKING_PRICING_URL)
+        
+        # Wait for MS365 redirect
+        WebDriverWait(driver, 15).until(
+            lambda d: "login.microsoftonline.com" in d.current_url
+        )
+        log_with_timestamp("🔄 Redirected to MS365 login")
+        
+        # Enter email
+        email_field = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.NAME, "loginfmt"))
+        )
+        email_field.clear()
+        email_field.send_keys(WASTEKING_EMAIL)
+        
+        # Click Next
+        time.sleep(1)
+        next_btn = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "idSIButton9"))
+        )
+        next_btn.click()
+        
+        # Enter password
+        time.sleep(3)
+        password_field = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.NAME, "passwd"))
+        )
+        password_field.clear()
+        password_field.send_keys(WASTEKING_PASSWORD)
+        
+        # Click Sign In
+        time.sleep(1)
+        signin_btn = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "idSIButton9"))
+        )
+        signin_btn.click()
+        
+        # Handle "Stay signed in" - CRITICAL for 30-day session
+        try:
+            log_with_timestamp("✋ Handling 'Stay signed in' prompt...")
+            stay_btn = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.ID, "idSIButton9"))
+            )
+            stay_btn.click()  # Click YES to stay signed in for 30 days
+            log_with_timestamp("✅ Clicked 'Stay signed in'")
+        except:
+            log_with_timestamp("No 'Stay signed in' prompt")
+        
+        # Wait for successful redirect
+        WebDriverWait(driver, 30).until(
+            lambda d: "wasteking-suppliermarketplace-dev" in d.current_url
+        )
+        log_with_timestamp("✅ Successfully authenticated WasteKing!")
+        
+        # Extract cookies
+        session = requests.Session()
+        cookies = driver.get_cookies()
+        for cookie in cookies:
+            session.cookies.set(cookie['name'], cookie['value'])
+        
+        # Test the session
+        test_response = session.get(WASTEKING_PRICING_URL)
+        if test_response.status_code == 200:
+            save_wasteking_session(session)
+            log_with_timestamp(f"🎉 WasteKing authentication complete! Session valid for 30 days.")
+            return session
+        else:
+            log_with_timestamp("❌ WasteKing session test failed")
+            return None
+            
+    except Exception as e:
+        log_error("WasteKing authentication failed", e)
+        return None
+    finally:
+        driver.quit()
+
+def extract_wasteking_pricing_data(response_text):
+    """Extract pricing data from WasteKing HTML response"""
+    
+    soup = BeautifulSoup(response_text, 'html.parser')
+    pricing_data = {}
+    
+    # Extract tables with pricing data
+    tables = soup.find_all('table')
+    table_data = []
+    
+    for i, table in enumerate(tables):
+        try:
+            rows = table.find_all('tr')
+            table_rows = []
+            
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if cells:
+                    row_data = [cell.get_text(strip=True) for cell in cells]
+                    if any(row_data):  # Skip empty rows
+                        table_rows.append(row_data)
+            
+            if table_rows:
+                table_data.append({
+                    'table_id': i,
+                    'headers': table_rows[0] if table_rows else [],
+                    'rows': table_rows[1:] if len(table_rows) > 1 else [],
+                    'total_rows': len(table_rows)
+                })
+                
+        except Exception as e:
+            log_error(f"Error processing WasteKing table {i}", e)
+            continue
+    
+    if table_data:
+        pricing_data['tables'] = table_data
+    
+    # Look for JSON data in scripts
+    scripts = soup.find_all('script')
+    script_data = []
+    
+    for script in scripts:
+        if script.string and ('price' in script.string.lower() or 'cost' in script.string.lower() or 'data' in script.string.lower()):
+            # Try to extract JSON
+            json_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', script.string)
+            for match in json_matches:
+                try:
+                    data = json.loads(match)
+                    if isinstance(data, dict) and len(str(data)) > 50:
+                        script_data.append(data)
+                except:
+                    continue
+    
+    if script_data:
+        pricing_data['script_data'] = script_data
+    
+    # Look for price mentions in text
+    price_elements = soup.find_all(text=re.compile(r'£\d+|cost|price|\$\d+', re.I))
+    price_mentions = []
+    
+    for element in price_elements[:20]:  # Limit to 20
+        text = element.strip()
+        if text and len(text) < 200:  # Skip very long texts
+            price_mentions.append(text)
+    
+    if price_mentions:
+        pricing_data['price_mentions'] = price_mentions
+    
+    return pricing_data
+
+def get_wasteking_prices():
+    """Get WasteKing pricing data for ElevenLabs"""
+    try:
+        log_with_timestamp("💰 Fetching WasteKing prices...")
+        
+        # Load saved session
+        session = load_wasteking_session()
+        
+        if not session:
+            # Try to auto-authenticate if no session
+            log_with_timestamp("No valid WasteKing session, attempting auto-authentication...")
+            session = authenticate_wasteking()
+            
+            if not session:
+                return {
+                    "error": "WasteKing authentication required",
+                    "status": "session_expired",
+                    "message": "Unable to authenticate with WasteKing system",
+                    "timestamp": datetime.now().isoformat()
+                }
+        
+        # Fetch pricing data
+        response = session.get(WASTEKING_PRICING_URL, timeout=15)
+        
+        if response.status_code == 200:
+            # Extract pricing data
+            pricing_data = extract_wasteking_pricing_data(response.text)
+            
+            if pricing_data:
+                return {
+                    "status": "success",
+                    "timestamp": datetime.now().isoformat(),
+                    "data_types": list(pricing_data.keys()),
+                    "data": pricing_data,
+                    "summary": f"Found {len(pricing_data)} data sections from WasteKing supplier marketplace"
+                }
+            else:
+                return {
+                    "status": "no_data",
+                    "message": "WasteKing page loaded but no pricing data found",
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+        elif response.status_code in [401, 403]:
+            # Session expired, try to re-authenticate
+            log_with_timestamp("WasteKing session expired, re-authenticating...")
+            session = authenticate_wasteking()
+            
+            if session:
+                # Retry with new session
+                response = session.get(WASTEKING_PRICING_URL, timeout=15)
+                if response.status_code == 200:
+                    pricing_data = extract_wasteking_pricing_data(response.text)
+                    return {
+                        "status": "success",
+                        "message": "Re-authenticated and fetched WasteKing data",
+                        "timestamp": datetime.now().isoformat(),
+                        "data": pricing_data
+                    }
+            
+            return {
+                "error": "WasteKing authentication failed",
+                "status": "auth_required",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        else:
+            return {
+                "error": f"WasteKing request failed with status {response.status_code}",
+                "status": "request_failed",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        log_error("Error fetching WasteKing prices", e)
+        return {
+            "error": str(e),
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }
 
 # --- Xelion API Functions ---
 def xelion_login() -> bool:
@@ -466,7 +788,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
 
 # --- OpenAI Analysis ---
 def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> Optional[Dict]:
-    """Analyze transcription using OpenAI for rankings with detailed logging."""
+    """Analyze transcription using OpenAI for rankings and summary with detailed logging."""
     if not OPENAI_AVAILABLE:
         log_with_timestamp(f"OpenAI library not available for OID {oid} - using fallback scoring", "WARN")
         # Return realistic fake scores so dashboard isn't useless
@@ -504,7 +826,8 @@ def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> 
                 "time_to_resolution": round(base_score + random.uniform(-1, 1), 1),
                 "follow_up_next_steps": round(base_score + random.uniform(-1.5, 1.5), 1)
             },
-            "overall_score": round(base_score + random.uniform(-0.5, 1), 1)
+            "overall_score": round(base_score + random.uniform(-0.5, 1), 1),
+            "summary": f"Call summary not available (OpenAI not configured). Transcript length: {len(transcript.split())} words."
         }
         
     if not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
@@ -521,15 +844,18 @@ def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> 
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # Simplified prompt to reduce complexity
-        prompt = f"""Rate this customer service call transcript from 1-10 in these areas:
+        # Enhanced prompt for both scoring and summary
+        prompt = f"""Analyze this customer service call transcript and provide:
 
-1. Customer Engagement (how well agent engaged with customer)
-2. Politeness (how polite and courteous the agent was)  
-3. Professional Knowledge (agent's product/service knowledge)
-4. Customer Resolution (how well the issue was resolved)
+1. Ratings from 1-10 for these areas:
+   - Customer Engagement (how well agent engaged)
+   - Politeness (courtesy and manners)  
+   - Professional Knowledge (product/service expertise)
+   - Customer Resolution (how well issue was resolved)
 
-Return ONLY a JSON object with this exact structure:
+2. A brief 2-3 sentence summary of what happened in the call
+
+Return ONLY valid JSON with this exact structure:
 {{
     "customer_engagement": {{
         "score": 7,
@@ -559,7 +885,8 @@ Return ONLY a JSON object with this exact structure:
         "time_to_resolution": 7,
         "follow_up_next_steps": 6
     }},
-    "overall_score": 7
+    "overall_score": 7,
+    "summary": "Customer called regarding billing issue. Agent was polite and professional, quickly identified the problem and provided a solution. Issue was resolved satisfactorily."
 }}
 
 Transcript: {transcript}"""
@@ -569,11 +896,11 @@ Transcript: {transcript}"""
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a customer service quality analyzer. Always return valid JSON with numeric scores 1-10."},
+                {"role": "system", "content": "You are a customer service quality analyzer. Always return valid JSON with numeric scores 1-10 and a brief summary."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            max_tokens=500,
+            max_tokens=600,
             temperature=0.3
         )
         
@@ -608,6 +935,14 @@ Transcript: {transcript}"""
         except (ValueError, TypeError):
             analysis_json['overall_score'] = 0.0
         
+        # Ensure summary exists
+        if 'summary' not in analysis_json:
+            analysis_json['summary'] = "Summary not provided by AI analysis."
+        
+        # Ensure summary exists
+        if 'summary' not in analysis_json:
+            analysis_json['summary'] = "Summary not provided by AI analysis."
+        
         log_with_timestamp(f"✅ OpenAI analysis successful for OID {oid} - Overall: {analysis_json['overall_score']}")
         return analysis_json
         
@@ -635,7 +970,7 @@ def categorize_call(transcript: str) -> str:
 def process_single_call(communication_data: Dict) -> Optional[str]:
     """
     Downloads audio, transcribes it, analyzes with OpenAI, stores in DB, and deletes audio.
-    Returns OID if successful, None otherwise. Enhanced with detailed logging.
+    Returns OID if successful, None otherwise. Enhanced with detailed logging and summary.
     """
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
@@ -678,14 +1013,14 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         INSERT INTO calls (
                             oid, call_datetime, agent_name, phone_number, call_direction, 
                             duration_seconds, status, user_id, category, processed_at, 
-                            processing_error, raw_communication_data
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            processing_error, raw_communication_data, summary_translation
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
                         xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
                         xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
                         None,  # processing_error - None for no audio case
-                        raw_data
+                        raw_data, "No audio available for transcription", "No audio available for transcription"
                     ))
                     conn.commit()
                     log_with_timestamp(f"Stored OID {oid} (Missed/No Audio) in DB")
@@ -719,7 +1054,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
         if not openai_analysis:
             log_with_timestamp(f"⚠️ OpenAI analysis failed for OID {oid}. Storing partial data", "WARN")
-            openai_analysis = {}  # Will result in all 0 scores
+            openai_analysis = {"summary": "Analysis failed - no summary available"}  # Will result in all 0 scores
 
         # 5. Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
@@ -740,8 +1075,8 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
                         professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
                         resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
-                        processing_error, raw_communication_data
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        processing_error, raw_communication_data, summary_translation
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
                     xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
@@ -771,7 +1106,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
                     openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
                     None,  # processing_error - None for successful processing
-                    raw_data
+                    raw_data, openai_analysis.get('summary', 'No summary available'), openai_analysis.get('summary', 'No summary available')
                 ))
                 conn.commit()
                 log_with_timestamp(f"Successfully stored OID {oid} and analysis in DB")
@@ -791,7 +1126,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
 
 def fetch_and_transcribe_recent_calls():
     """
-    Enhanced version with detailed logging and status tracking.
+    Enhanced version with detailed logging and status tracking. Fetches MORE data by increasing limits.
     """
     global background_process_running
     background_process_running = True
@@ -810,17 +1145,37 @@ def fetch_and_transcribe_recent_calls():
         while background_process_running:
             try:
                 log_with_timestamp(f"Polling for new calls until {until_date.strftime('%Y-%m-%d %H:%M:%S')}")
-                comms, _ = _fetch_communications_page(limit=50, until_date=until_date)
                 
-                if not comms:
+                # INCREASED LIMIT: Fetch more communications per request (was 50, now 200)
+                comms, next_before_oid = _fetch_communications_page(limit=200, until_date=until_date)
+                
+                # FETCH MULTIPLE PAGES: Get more historical data
+                all_comms = comms.copy()
+                page_count = 1
+                max_pages = 5  # Fetch up to 5 pages (500 communications total)
+                
+                while next_before_oid and page_count < max_pages and background_process_running:
+                    log_with_timestamp(f"Fetching additional page {page_count + 1} with before_oid: {next_before_oid}")
+                    additional_comms, next_before_oid = _fetch_communications_page(
+                        limit=100, 
+                        until_date=until_date, 
+                        before_oid=next_before_oid
+                    )
+                    all_comms.extend(additional_comms)
+                    page_count += 1
+                    time.sleep(1)  # Small delay between pages
+                
+                log_with_timestamp(f"Total communications fetched across {page_count} pages: {len(all_comms)}")
+                
+                if not all_comms:
                     log_with_timestamp("No new communications found in this poll")
                 else:
-                    log_with_timestamp(f"Found {len(comms)} communications to analyze")
+                    log_with_timestamp(f"Found {len(all_comms)} communications to analyze")
                 
                 futures = []
                 calls_to_process = []
                 
-                for comm in comms:
+                for comm in all_comms:
                     comm_obj = comm.get('object', {})
                     oid = comm_obj.get('oid')
                     status = comm_obj.get('status', '').lower()
@@ -900,6 +1255,7 @@ def get_status():
         "openai_available": OPENAI_AVAILABLE,
         "openai_connection_test": openai_test_result,
         "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
+        "wasteking_session_valid": load_wasteking_session() is not None,
         "last_poll": processing_stats.get('last_poll_time', 'Never'),
         "last_error": processing_stats.get('last_error', 'None')
     })
@@ -1042,6 +1398,184 @@ def get_dashboard_data():
             "processing_stats": processing_stats
         })
 
+@app.route('/get_calls_list')
+def get_calls_list():
+    """Get detailed list of calls with agent names, scores, and summaries"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    agent_filter = request.args.get('agent', '')
+    category_filter = request.args.get('category', '')
+    
+    offset = (page - 1) * per_page
+    
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Build query with filters
+        where_conditions = []
+        params = []
+        
+        if agent_filter:
+            where_conditions.append("agent_name LIKE ?")
+            params.append(f"%{agent_filter}%")
+        
+        if category_filter:
+            where_conditions.append("category = ?")
+            params.append(category_filter)
+        
+        where_clause = ""
+        if where_conditions:
+            where_clause = "WHERE " + " AND ".join(where_conditions)
+        
+        # Get total count for pagination
+        count_query = f"SELECT COUNT(*) FROM calls {where_clause}"
+        cursor.execute(count_query, params)
+        total_calls = cursor.fetchone()[0]
+        
+        # Get calls with pagination
+        query = f"""
+            SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
+                   duration_seconds, status, category, openai_overall_score,
+                   openai_engagement, openai_politeness, openai_professionalism, 
+                   openai_resolution, summary_translation, transcribed_duration_minutes,
+                   deepgram_cost_gbp, word_count, confidence, processed_at
+            FROM calls 
+            {where_clause}
+            ORDER BY processed_at DESC 
+            LIMIT ? OFFSET ?
+        """
+        
+        params.extend([per_page, offset])
+        cursor.execute(query, params)
+        
+        calls = []
+        for row in cursor.fetchall():
+            call_data = dict(row)
+            # Format duration
+            if call_data['duration_seconds']:
+                minutes = int(call_data['duration_seconds'] // 60)
+                seconds = int(call_data['duration_seconds'] % 60)
+                call_data['formatted_duration'] = f"{minutes}:{seconds:02d}"
+            else:
+                call_data['formatted_duration'] = "0:00"
+            
+            # Format datetime
+            if call_data['call_datetime']:
+                try:
+                    dt = datetime.fromisoformat(call_data['call_datetime'].replace('Z', '+00:00'))
+                    call_data['formatted_datetime'] = dt.strftime('%Y-%m-%d %H:%M')
+                except:
+                    call_data['formatted_datetime'] = call_data['call_datetime']
+            
+            calls.append(call_data)
+        
+        # Get unique agents and categories for filters
+        cursor.execute("SELECT DISTINCT agent_name FROM calls WHERE agent_name != 'Unknown' ORDER BY agent_name")
+        agents = [row[0] for row in cursor.fetchall()]
+        
+        cursor.execute("SELECT DISTINCT category FROM calls WHERE category IS NOT NULL ORDER BY category")
+        categories = [row[0] for row in cursor.fetchall()]
+        
+        conn.close()
+        
+        return jsonify({
+            "calls": calls,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total": total_calls,
+                "pages": (total_calls + per_page - 1) // per_page
+            },
+            "filters": {
+                "agents": agents,
+                "categories": categories
+            }
+        })
+
+# --- ElevenLabs Webhook Endpoints ---
+@app.route('/api/get-wasteking-prices', methods=['GET'])
+def elevenlabs_get_wasteking_prices():
+    """
+    ElevenLabs webhook endpoint for fetching WasteKing pricing data
+    This is the URL ElevenLabs will call
+    """
+    log_with_timestamp("📞 ElevenLabs called WasteKing pricing endpoint")
+    
+    try:
+        result = get_wasteking_prices()
+        return jsonify(result)
+    except Exception as e:
+        log_error("Error in ElevenLabs WasteKing endpoint", e)
+        return jsonify({
+            "error": "Internal server error",
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/setup-wasteking', methods=['POST'])
+def setup_wasteking_session():
+    """Setup WasteKing authentication session"""
+    try:
+        log_with_timestamp("🚀 Starting WasteKing session setup...")
+        session = authenticate_wasteking()
+        
+        if session:
+            return jsonify({
+                "status": "success",
+                "message": "WasteKing authentication successful! Session saved for 30 days.",
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "WasteKing authentication failed",
+                "timestamp": datetime.now().isoformat()
+            }), 500
+            
+    except Exception as e:
+        log_error("WasteKing setup error", e)
+        return jsonify({
+            "status": "error",
+            "message": f"Setup failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/get_calls_list')
+def get_calls_list():
+    """Get detailed list of calls with agent names, scores, and summaries"""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT oid, call_datetime, agent_name, phone_number, category, 
+                   openai_overall_score, openai_engagement, openai_politeness, 
+                   openai_professionalism, openai_resolution, summary_translation,
+                   duration_seconds, status
+            FROM calls 
+            ORDER BY processed_at DESC 
+            LIMIT 100
+        """)
+        calls = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({"calls": calls})
+
+@app.route('/api/get-wasteking-prices', methods=['GET'])
+def elevenlabs_wasteking_webhook():
+    """ElevenLabs webhook endpoint for fetching WasteKing pricing data"""
+    log_with_timestamp("📞 ElevenLabs called WasteKing pricing endpoint")
+    
+    try:
+        result = get_wasteking_prices()
+        return jsonify(result)
+    except Exception as e:
+        log_error("Error in ElevenLabs WasteKing endpoint", e)
+        return jsonify({
+            "error": "Internal server error",
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
 @app.route('/test_openai')
 def test_openai_endpoint():
     """Test OpenAI analysis with a sample transcript"""
@@ -1056,21 +1590,6 @@ def test_openai_endpoint():
         "openai_available": OPENAI_AVAILABLE,
         "api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'
     })
-    """Get recent calls for debugging"""
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT oid, call_datetime, status, category, agent_name, phone_number, 
-                   transcription_text, processed_at, processing_error
-            FROM calls 
-            ORDER BY processed_at DESC 
-            LIMIT 20
-        """)
-        calls = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        
-        return jsonify({"recent_calls": calls})
 
 @app.route('/get_recent_calls')
 def get_recent_calls():
@@ -1081,7 +1600,8 @@ def get_recent_calls():
         cursor.execute("""
             SELECT oid, call_datetime, status, category, agent_name, phone_number, 
                    transcription_text, processed_at, processing_error,
-                   openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score
+                   openai_engagement, openai_politeness, openai_professionalism, 
+                   openai_resolution, openai_overall_score, summary_translation
             FROM calls 
             ORDER BY processed_at DESC 
             LIMIT 20
@@ -1090,6 +1610,9 @@ def get_recent_calls():
         conn.close()
         
         return jsonify({"recent_calls": calls})
+
+@app.route('/init_db_manual')
+def init_db_manual():
     init_db()
     return "Database initialization attempted (check logs for details)."
 
@@ -1134,7 +1657,8 @@ def reprocess_zero_scores():
                         engagement_sub1 = ?, engagement_sub2 = ?, engagement_sub3 = ?, engagement_sub4 = ?,
                         politeness_sub1 = ?, politeness_sub2 = ?, politeness_sub3 = ?, politeness_sub4 = ?,
                         professionalism_sub1 = ?, professionalism_sub2 = ?, professionalism_sub3 = ?, professionalism_sub4 = ?,
-                        resolution_sub1 = ?, resolution_sub2 = ?, resolution_sub3 = ?, resolution_sub4 = ?
+                        resolution_sub1 = ?, resolution_sub2 = ?, resolution_sub3 = ?, resolution_sub4 = ?,
+                        summary_translation = ?
                         WHERE oid = ?
                     """, (
                         analysis.get('customer_engagement', {}).get('score', 0),
@@ -1158,6 +1682,7 @@ def reprocess_zero_scores():
                         analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
                         analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
                         analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                        analysis.get('summary', 'No summary available'),
                         oid
                     ))
                     conn.commit()
@@ -1172,13 +1697,6 @@ def reprocess_zero_scores():
             "reprocessed": reprocessed_count,
             "total_found": len(calls_to_reprocess)
         })
-    init_db()
-    return "Database initialization attempted (check logs for details)."
-
-@app.route('/init_db_manual')
-def init_db_manual():
-    init_db()
-    return "Database initialization attempted (check logs for details)."
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
