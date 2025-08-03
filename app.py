@@ -834,6 +834,53 @@ log_with_timestamp("✅ Call monitoring auto-started")
 def index():
     return render_template('index.html')
 
+@app.route('/debug_audio')
+def debug_audio():
+    """Debug why Answer calls don't have audio"""
+    try:
+        # Get recent Answer calls
+        comms, _ = _fetch_communications_page(limit=10, until_date=datetime.now())
+        
+        debug_info = []
+        for comm in comms[:3]:  # Test first 3
+            comm_obj = comm.get('object', {})
+            oid = comm_obj.get('oid')
+            status = comm_obj.get('status')
+            duration = comm_obj.get('durationSec', 0)
+            
+            if status == "Answer":
+                # Test multiple audio URLs
+                audio_urls = [
+                    f"{XELION_BASE_URL.rstrip('/')}/communications/{oid}/audio",
+                    f"{XELION_BASE_URL.rstrip('/')}/communications/{oid}/recording", 
+                    f"{XELION_BASE_URL.rstrip('/')}/communications/{oid}/media",
+                    f"{XELION_BASE_URL.rstrip('/')}/communications/{oid}/file"
+                ]
+                
+                url_results = []
+                for url in audio_urls:
+                    try:
+                        response = xelion_session.get(url, timeout=10)
+                        url_results.append({
+                            "url": url,
+                            "status": response.status_code,
+                            "size": len(response.content) if response.status_code == 200 else 0,
+                            "content_type": response.headers.get('content-type', 'unknown')
+                        })
+                    except Exception as e:
+                        url_results.append({"url": url, "error": str(e)})
+                
+                debug_info.append({
+                    "oid": oid,
+                    "status": status,
+                    "duration": duration,
+                    "url_tests": url_results
+                })
+        
+        return jsonify({"debug_results": debug_info})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
 @app.route('/status')
 def get_status():
     """Get system status"""
