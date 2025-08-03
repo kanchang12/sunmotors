@@ -931,7 +931,7 @@ def categorize_call(transcript: str) -> str:
     return "general enquiry"
 
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call - only download audio for answered calls with duration"""
+    """Process single call - try audio for ALL calls like transcription.py"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
     
@@ -958,13 +958,9 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         
         log_with_timestamp(f"📊 Call - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
         
-        # ONLY try audio download for answered calls with duration > 30 seconds
-        if xelion_metadata['status'].lower() == 'answer' and xelion_metadata['duration_seconds'] > 30:
-            log_with_timestamp(f"🎵 Call answered with {xelion_metadata['duration_seconds']}s - downloading audio")
-            audio_file_path = download_audio(oid)
-        else:
-            log_with_timestamp(f"⏭️ Skipping audio - Status: {xelion_metadata['status']}, Duration: {xelion_metadata['duration_seconds']}s")
-            audio_file_path = None
+        # TRY AUDIO FOR ALL CALLS - let Xelion API decide what exists
+        log_with_timestamp(f"🎵 Attempting audio download for OID {oid} (ignoring status/duration)")
+        audio_file_path = download_audio(oid)
         
         if not audio_file_path:
             # Store without audio
