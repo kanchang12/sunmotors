@@ -14,17 +14,8 @@ from typing import Dict, List, Optional, Tuple
 import re
 from bs4 import BeautifulSoup
 
-# Use Selenium with proper Chrome setup
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
+# Selenium removed - using direct API calls instead
+SELENIUM_AVAILABLE = False
 
 # OpenAI import
 try:
@@ -226,262 +217,179 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate WasteKing with Selenium Chrome"""
-    log_with_timestamp("🔐 Starting WasteKing authentication with Selenium...")
-    
-    if not SELENIUM_AVAILABLE:
-        return {
-            "error": "Selenium not available",
-            "status": "selenium_unavailable",
-            "message": "Selenium not installed",
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    # Enhanced Chrome options for containers
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--single-process")
-    chrome_options.add_argument("--no-zygote")
-    chrome_options.add_argument("--disable-web-security")
-    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
-    chrome_options.add_argument("--remote-debugging-port=9222")
-    chrome_options.add_argument("--disable-background-timer-throttling")
-    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-    chrome_options.add_argument("--disable-renderer-backgrounding")
-    
-    # Detect container environment
-    is_container = any([
-        os.environ.get('PORT'),
-        os.environ.get('DYNO'),
-        os.environ.get('KOYEB_PUBLIC_DOMAIN'),
-        os.path.exists('/.dockerenv'),
-    ])
-    
-    if is_container:
-        log_with_timestamp("🐳 Container environment detected")
-        
-        # Try multiple Chrome binary locations
-        chrome_paths = [
-            '/usr/bin/google-chrome-stable',
-            '/usr/bin/google-chrome',
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/opt/google/chrome/chrome'
-        ]
-        
-        chrome_binary = None
-        for path in chrome_paths:
-            if os.path.exists(path):
-                chrome_binary = path
-                log_with_timestamp(f"✅ Found Chrome at: {path}")
-                break
-        
-        if chrome_binary:
-            chrome_options.binary_location = chrome_binary
-        else:
-            log_error("Chrome binary not found in any expected location")
-            return {
-                "error": "Chrome not installed",
-                "status": "chrome_not_found",
-                "message": "Chrome browser not found in container. Please install Chrome in your container.",
-                "timestamp": datetime.now().isoformat(),
-                "searched_paths": chrome_paths
-            }
+    """Authenticate WasteKing using direct API calls (NO BROWSER)"""
+    log_with_timestamp("🔐 Starting WasteKing authentication with direct API...")
     
     try:
-        # Setup ChromeDriver service
-        service = None
-        chromedriver_paths = [
-            '/usr/local/bin/chromedriver',
-            '/usr/bin/chromedriver',
-            '/opt/chromedriver/chromedriver'
+        # Step 1: Get the login page to extract any CSRF tokens or cookies
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        })
+        
+        log_with_timestamp("🌐 Getting login page...")
+        
+        # Try multiple potential login URLs
+        login_urls = [
+            f"{WASTEKING_BASE_URL}/login",
+            f"{WASTEKING_BASE_URL}/account/login", 
+            f"{WASTEKING_BASE_URL}/auth/login",
+            f"{WASTEKING_BASE_URL}/user/login",
+            WASTEKING_PRICING_URL  # Sometimes login redirects happen
         ]
         
-        chromedriver_path = None
-        for path in chromedriver_paths:
-            if os.path.exists(path):
-                chromedriver_path = path
-                break
+        login_page_response = None
+        working_login_url = None
         
-        if chromedriver_path:
-            service = Service(chromedriver_path)
-            log_with_timestamp(f"✅ Using ChromeDriver at: {chromedriver_path}")
-        else:
-            # Try webdriver_manager as fallback
+        for url in login_urls:
             try:
-                from webdriver_manager.chrome import ChromeDriverManager
-                service = Service(ChromeDriverManager().install())
-                log_with_timestamp("📦 Using ChromeDriverManager for driver setup")
-            except ImportError:
-                log_error("webdriver_manager not available and no chromedriver found")
-                return {
-                    "error": "ChromeDriver not found",
-                    "status": "chromedriver_not_found",
-                    "message": "ChromeDriver not found and webdriver_manager not available",
-                    "timestamp": datetime.now().isoformat()
-                }
-            
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(30)
+                log_with_timestamp(f"Trying login URL: {url}")
+                response = session.get(url, timeout=10, allow_redirects=True)
+                if response.status_code == 200:
+                    login_page_response = response
+                    working_login_url = url
+                    log_with_timestamp(f"✅ Found working login URL: {url}")
+                    break
+            except:
+                continue
         
-    except Exception as e:
-        log_error("Failed to setup Chrome", e)
-        return {
-            "error": "Chrome setup failed",
-            "status": "chrome_unavailable", 
-            "message": f"Chrome initialization failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    try:
-        log_with_timestamp("🌐 Navigating to WasteKing...")
-        driver.get(WASTEKING_PRICING_URL)
+        if not login_page_response:
+            return {
+                "error": "Could not access login page",
+                "status": "login_page_not_found",
+                "message": "All login URLs failed",
+                "timestamp": datetime.now().isoformat()
+            }
         
-        # Wait for page load
-        WebDriverWait(driver, 10).until(
-            lambda d: d.execute_script("return document.readyState") == "complete"
-        )
-        
-        # Check if already logged in
-        current_url = driver.current_url
-        if 'reporting' in current_url.lower():
-            log_with_timestamp("✅ Already logged in!")
-            
-            # Extract cookies
-            cookies = driver.get_cookies()
-            session = create_session_from_selenium_cookies(cookies)
-            driver.quit()
-            
-            save_wasteking_session(session)
-            return session
+        # Step 2: Parse the login page for form details
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(login_page_response.text, 'html.parser')
         
         # Look for login form
-        try:
-            email_field = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 
-                    "input[name='email'], input[type='email'], input[id*='email'], #email"))
-            )
-            log_with_timestamp("🔍 Login form detected")
-        except:
-            driver.quit()
-            return {
-                "error": "Login form not found",
-                "status": "no_login_form",
-                "message": f"Could not find login form. Current URL: {driver.current_url}",
-                "timestamp": datetime.now().isoformat()
-            }
+        login_form = soup.find('form') or soup.find('form', {'action': lambda x: x and 'login' in x.lower()})
         
-        # Fill email
-        log_with_timestamp("📝 Filling email...")
-        email_field.clear()
-        email_field.send_keys(WASTEKING_EMAIL)
+        csrf_token = None
+        form_action = working_login_url
         
-        # Fill password
-        try:
-            password_field = driver.find_element(By.CSS_SELECTOR, 
-                "input[name='password'], input[type='password'], input[id*='password'], #password")
-            password_field.clear()
-            password_field.send_keys(WASTEKING_PASSWORD)
-            log_with_timestamp("📝 Password filled")
-        except Exception as e:
-            driver.quit()
-            return {
-                "error": "Could not fill password field",
-                "status": "password_field_error",
-                "message": f"Password field error: {str(e)}",
-                "timestamp": datetime.now().isoformat()
-            }
-        
-        # Submit form
-        log_with_timestamp("🚀 Submitting login form...")
-        try:
-            submit_button = driver.find_element(By.CSS_SELECTOR, 
-                "button[type='submit'], input[type='submit'], .btn-login, button:contains('Login'), button:contains('Sign in')")
-            submit_button.click()
-        except:
-            # Try pressing Enter as fallback
-            password_field.send_keys(Keys.RETURN)
-        
-        # Wait for navigation
-        try:
-            WebDriverWait(driver, 15).until(
-                lambda d: 'reporting' in d.current_url.lower() or 
-                         'dashboard' in d.current_url.lower() or
-                         d.current_url != WASTEKING_PRICING_URL
-            )
-            log_with_timestamp("✅ Navigation detected")
-        except:
-            pass
-        
-        # Check final URL
-        final_url = driver.current_url
-        if 'reporting' in final_url.lower() or 'dashboard' in final_url.lower():
-            log_with_timestamp("✅ Login successful!")
+        if login_form:
+            # Extract form action
+            action = login_form.get('action')
+            if action:
+                if action.startswith('/'):
+                    form_action = f"{WASTEKING_BASE_URL}{action}"
+                elif action.startswith('http'):
+                    form_action = action
+                
+            # Look for CSRF token
+            csrf_input = login_form.find('input', {'name': lambda x: x and 'csrf' in x.lower()}) or \
+                        login_form.find('input', {'name': lambda x: x and 'token' in x.lower()}) or \
+                        login_form.find('input', {'type': 'hidden'})
             
-            # Extract cookies and create session
-            cookies = driver.get_cookies()
-            session = create_session_from_selenium_cookies(cookies)
-            driver.quit()
+            if csrf_input:
+                csrf_token = csrf_input.get('value')
+                log_with_timestamp(f"🔑 Found CSRF token: {csrf_token[:20]}...")
+        
+        # Step 3: Prepare login data
+        login_data = {
+            'email': WASTEKING_EMAIL,
+            'password': WASTEKING_PASSWORD
+        }
+        
+        # Add CSRF token if found
+        if csrf_token:
+            # Try common CSRF field names
+            csrf_names = ['_token', 'csrf_token', '__RequestVerificationToken', 'authenticity_token']
+            for name in csrf_names:
+                if soup.find('input', {'name': name}):
+                    login_data[name] = csrf_token
+                    break
+        
+        # Step 4: Attempt login
+        log_with_timestamp(f"🚀 Submitting login to: {form_action}")
+        
+        # Set proper headers for form submission
+        session.headers.update({
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': WASTEKING_BASE_URL,
+            'Referer': working_login_url
+        })
+        
+        login_response = session.post(form_action, data=login_data, timeout=15, allow_redirects=True)
+        
+        log_with_timestamp(f"Login response status: {login_response.status_code}")
+        
+        # Step 5: Check if login was successful
+        if login_response.status_code == 200:
+            # Check if we're redirected to dashboard/reporting or still on login page
+            final_url = login_response.url
+            response_text = login_response.text.lower()
             
-            # Test session
-            test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
-            if test_response.status_code == 200:
-                save_wasteking_session(session)
-                log_with_timestamp("✅ WasteKing authentication successful!")
-                return session
-            else:
+            success_indicators = ['dashboard', 'reporting', 'logout', 'welcome', 'profile']
+            failure_indicators = ['login', 'error', 'invalid', 'incorrect']
+            
+            if any(indicator in final_url.lower() for indicator in success_indicators) or \
+               any(indicator in response_text for indicator in success_indicators):
+                
+                # Test access to pricing URL
+                test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
+                if test_response.status_code == 200:
+                    save_wasteking_session(session)
+                    log_with_timestamp("✅ WasteKing authentication successful!")
+                    return session
+                else:
+                    log_with_timestamp(f"❌ Login seemed successful but pricing URL failed: {test_response.status_code}")
+            
+            elif any(indicator in response_text for indicator in failure_indicators):
                 return {
-                    "error": "Session test failed",
-                    "status": "session_invalid",
-                    "message": f"Test request failed with status {test_response.status_code}",
+                    "error": "Login failed - invalid credentials",
+                    "status": "login_failed",
+                    "message": "Username/password incorrect",
                     "timestamp": datetime.now().isoformat()
                 }
-        else:
-            driver.quit()
-            return {
-                "error": "Login failed",
-                "status": "login_failed",
-                "message": f"Login unsuccessful. Final URL: {final_url}",
-                "timestamp": datetime.now().isoformat()
-            }
+        
+        # If we reach here, try alternative approaches
+        log_with_timestamp("🔄 Trying alternative login approaches...")
+        
+        # Try JSON login
+        session.headers.update({'Content-Type': 'application/json'})
+        json_login_data = json.dumps(login_data)
+        
+        for endpoint in ['/api/login', '/auth', '/api/auth/login']:
+            try:
+                api_url = f"{WASTEKING_BASE_URL}{endpoint}"
+                json_response = session.post(api_url, data=json_login_data, timeout=10)
+                if json_response.status_code == 200:
+                    test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
+                    if test_response.status_code == 200:
+                        save_wasteking_session(session)
+                        log_with_timestamp(f"✅ WasteKing JSON login successful via {endpoint}")
+                        return session
+            except:
+                continue
+        
+        return {
+            "error": "All login methods failed",
+            "status": "login_failed", 
+            "message": "Could not authenticate with any method",
+            "timestamp": datetime.now().isoformat()
+        }
         
     except Exception as e:
-        log_error("WasteKing authentication failed", e)
-        try:
-            driver.quit()
-        except:
-            pass
+        log_error("WasteKing API authentication failed", e)
         return {
-            "error": "Authentication failed",
+            "error": "Authentication error",
             "status": "auth_error",
-            "message": f"Login process failed: {str(e)}",
+            "message": f"API login failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }
 
-def create_session_from_selenium_cookies(cookies):
-    """Create requests session from Selenium cookies"""
-    session = requests.Session()
-    
-    for cookie in cookies:
-        session.cookies.set(
-            cookie['name'], 
-            cookie['value'], 
-            domain=cookie.get('domain', ''),
-            path=cookie.get('path', '/')
-        )
-    
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, text/html, */*',
-        'Accept-Language': 'en-US,en;q=0.9'
-    })
-    
-    return session
+
+
 
 def get_wasteking_prices():
     """Get WasteKing pricing data"""
