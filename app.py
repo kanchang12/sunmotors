@@ -414,57 +414,67 @@ def download_audio(communication_oid: str) -> Optional[str]:
         return None
 
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
-    """FIXED: Better transcription error handling"""
-    if not DEEPGRAM_API_KEY:
+    """FIXED: Use direct API instead of SDK to avoid typing.Union error"""
+    if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
         log_error("Deepgram API key not configured")
         return None
+
     oid = metadata_row['oid']
+    
     if not os.path.exists(audio_file_path):
         log_error(f"Audio file not found for transcription: {audio_file_path}")
         return None
+    
     try:
-        if DEEPGRAM_SDK_AVAILABLE:
-            try:
-                deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
-                options = PrerecordedOptions(
-                    model="nova-2", smart_format=True, punctuate=True,
-                    diarize=True, utterances=True, language="en-GB"
-                )
-                log_with_timestamp(f"Transcribing OID {oid} using Deepgram SDK...")
-                with open(audio_file_path, 'rb') as audio_:
-                    source = FileSource(audio=audio_)
-                    response = deepgram_client.listen.prerecorded.v("1").transcribe_file(source, options)
-                
-                deepgram_data = response.to_dict()
-                utterances = deepgram_data.get('results', {}).get('utterances', [])
-                full_transcript = " ".join([u['transcript'] for u in utterances])
-                
-                metadata = deepgram_data.get('metadata', {})
-                if not full_transcript:
-                    log_error(f"Deepgram returned no transcript for OID {oid}")
-                    return None
-                
-                deepgram_duration = metadata.get('duration', 0)
-                deepgram_cost_per_minute = 0.0004 if options.get('model') == 'nova-2' else 0.0001
-                deepgram_cost_usd = (deepgram_duration / 60) * deepgram_cost_per_minute
-                
-                transcription_result = {
-                    'transcription_text': full_transcript,
-                    'word_count': metadata.get('words', 0),
-                    'confidence': metadata.get('confidence', 0),
-                    'language': metadata.get('language', 'en-GB'),
-                    'transcribed_duration_minutes': deepgram_duration / 60,
-                    'deepgram_cost_usd': deepgram_cost_usd,
-                    'deepgram_cost_gbp': deepgram_cost_usd * 0.8
-                }
-                log_with_timestamp(f"✅ Transcription for OID {oid} complete. Cost: ${transcription_result['deepgram_cost_usd']:.4f}")
-                return transcription_result
+        # ALWAYS use direct API to avoid SDK typing issues
+        url = "https://api.deepgram.com/v1/listen"
+        headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
+        params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
+                  "diarize": "true", "utterances": "true", "language": "en-GB"}
+        
+        log_with_timestamp(f"Transcribing OID {oid} using Deepgram direct API...")
+        with open(audio_file_path, 'rb') as audio_file:
+            response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
+        
+        response.raise_for_status()
+        result = response.json()
+        
+        if 'results' not in result or not result['results']['channels']:
+            log_error(f"No transcription results from API for OID {oid}")
+            return None
+        
+        transcript_data = result['results']['channels'][0]['alternatives'][0]
+        transcript_text = transcript_data['transcript']
+        duration_seconds = result['metadata']['duration']
+        confidence = transcript_data.get('confidence', 0)
+        language = result['metadata'].get('detected_language', 'en')
+        
+        log_with_timestamp(f"✅ Deepgram API transcribed OID {oid} successfully")
 
-            except Exception as e:
-                log_error(f"Deepgram SDK transcription failed for OID {oid}", e)
-                return None
+        if not transcript_text.strip():
+            log_with_timestamp(f"Empty transcription for OID {oid}", "WARN")
+            return None
+        
+        duration_minutes = duration_seconds / 60
+        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
+        cost_gbp = cost_usd * USD_TO_GBP_RATE
+        word_count = len(transcript_text.split())
+
+        log_with_timestamp(f"Transcription complete for OID {oid}: {word_count} words, {duration_minutes:.2f} minutes")
+
+        return {
+            'oid': oid,
+            'transcription_text': transcript_text,
+            'transcribed_duration_minutes': round(duration_minutes, 2),
+            'deepgram_cost_usd': round(cost_usd, 4),
+            'deepgram_cost_gbp': round(cost_gbp, 4),
+            'word_count': word_count,
+            'confidence': round(confidence, 3),
+            'language': language
+        }
+            
     except Exception as e:
-        log_error(f"Unexpected error during transcription for OID {oid}", e)
+        log_error(f"Deepgram transcription failed for OID {oid}", e)
         return None
 
 def analyze_transcription_with_openai(transcript: str, oid: str) -> Optional[Dict]:
