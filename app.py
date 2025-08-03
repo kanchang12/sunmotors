@@ -1,148 +1,81 @@
 import os
-import requests
-import json
-import csv
 import sqlite3
+import json
 import threading
 import time
-import traceback
-import pickle
+import requests
 from datetime import datetime, timedelta
-from flask import Flask, render_template, jsonify, request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple
-import re
-from bs4 import BeautifulSoup
+from typing import Optional, Dict, List, Tuple
+from flask import Flask, jsonify, render_template, request
 
-# Try to import Selenium (might not be available in all environments)
+# --- Dummy/Mock Setup (Replace with your actual configuration) ---
+# Assuming these are set via environment variables or a config file
+XELION_BASE_URL = os.environ.get("XELION_BASE_URL")
+XELION_USERNAME = os.environ.get("XELION_USERNAME")
+XELION_PASSWORD = os.environ.get("XELION_PASSWORD")
+XELION_USERSPACE = os.environ.get("XELION_USERSPACE")
+XELION_APP_KEY = os.environ.get("XELION_APP_KEY")
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+WASTEKING_PRICING_URL = os.environ.get("WASTEKING_PRICING_URL")
+
+OPENAI_AVAILABLE = bool(OPENAI_API_KEY)
+DEEPGRAM_SDK_AVAILABLE = True  # Assuming SDK is installed
+SELENIUM_AVAILABLE = False  # Assuming Selenium is not used for this version
+
+if DEEPGRAM_SDK_AVAILABLE:
+    try:
+        from deepgram import DeepgramClient, FileSource, PrerecordedOptions
+    except ImportError:
+        DEEPGRAM_SDK_AVAILABLE = False
+        print("WARN: Deepgram SDK not found. Will fall back to direct API calls.")
+
+if OPENAI_AVAILABLE:
+    try:
+        from openai import OpenAI
+    except ImportError:
+        OPENAI_AVAILABLE = False
+        print("WARN: OpenAI library not found. Analysis will use fallback scoring.")
+
 try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
+    from bs4 import BeautifulSoup
 except ImportError:
-    SELENIUM_AVAILABLE = False
+    BeautifulSoup = None
+    print("WARN: BeautifulSoup not found. Web scraping for WasteKing will fail.")
 
-# Attempt Deepgram SDK import
-try:
-    from deepgram import DeepgramClient, PrerecordedOptions, FileSource
-    DEEPGRAM_SDK_AVAILABLE = True
-except ImportError:
-    DEEPGRAM_SDK_AVAILABLE = False
+# Constants
+AUDIO_TEMP_DIR = 'audio_temp'
+if not os.path.exists(AUDIO_TEMP_DIR):
+    os.makedirs(AUDIO_TEMP_DIR)
+DB_PATH = 'call_data.db'
 
-# Attempt OpenAI import
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-
-# --- Configuration ---
-# Xelion API (Replace with your actual Xelion details)
-XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1/wasteking')
-XELION_USERNAME = os.getenv('XELION_USERNAME', 'your_xelion_username')
-XELION_PASSWORD = os.getenv('XELION_PASSWORD', 'your_xelion_password')
-XELION_APP_KEY = os.getenv('XELION_APP_KEY', 'your_xelion_app_key')
-XELION_USERSPACE = os.getenv('XELION_USERSPACE', 'transcriber-abi-housego')
-
-# Deepgram API
-DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
-
-# OpenAI API (Replace with your actual OpenAI API Key)
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
-
-# WasteKing API Configuration
-WASTEKING_EMAIL = os.getenv('WASTEKING_EMAIL', 'your_wasteking_email')
-WASTEKING_PASSWORD = os.getenv('WASTEKING_PASSWORD', 'your_wasteking_password')
-WASTEKING_BASE_URL = "https://wasteking-suppliermarketplace-dev.azurewebsites.net"
-WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-breakdown/"
-
-# Database configuration
-DATABASE_FILE = 'calls.db'
-
-# Directory for temporary audio files
-AUDIO_TEMP_DIR = 'temp_audio'
-os.makedirs(AUDIO_TEMP_DIR, exist_ok=True)
-
-# Session files
-WASTEKING_COOKIES_FILE = "wasteking_session.pkl"
-SESSION_TIMEOUT_DAYS = 30
-
-# Deepgram pricing and currency conversion
-DEEPGRAM_PRICE_PER_MINUTE = 0.0043  # $0.0043 per minute for Nova-2 model
-USD_TO_GBP_RATE = 0.79
-
-# Global session and locks for thread safety
-xelion_session = requests.Session()
-session_token = None
-login_lock = threading.Lock()
-db_lock = threading.Lock()
-transcription_lock = threading.Lock()
-
-# Global flag to track if background process is running
+# Global state and locks
 background_process_running = False
 background_thread = None
-
-# Statistics tracking
+xelion_session = requests.Session()
+login_lock = threading.Lock()
+db_lock = threading.Lock()
 processing_stats = {
     'total_fetched': 0,
     'total_processed': 0,
-    'total_skipped': 0,
     'total_errors': 0,
-    'statuses_seen': {},
-    'last_poll_time': None,
-    'last_error': None
+    'total_skipped': 0,
+    'last_poll_time': 'Never',
+    'last_error': 'None',
+    'statuses_seen': {}
 }
 
-def log_with_timestamp(message, level="INFO"):
-    """Enhanced logging with timestamps and levels"""
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{timestamp}] [{level}] {message}")
-
-def log_error(message, error=None):
-    """Log errors with full traceback"""
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    if error:
-        log_with_timestamp(f"ERROR: {message}: {error}", "ERROR")
-        log_with_timestamp(f"Full traceback: {traceback.format_exc()}", "ERROR")
-    else:
-        log_with_timestamp(f"ERROR: {message}", "ERROR")
-    
-    # Update global error tracking
-    processing_stats['last_error'] = f"{message}: {error}" if error else message
-
-def test_openai_connection() -> bool:
-    """Test OpenAI API connection with a simple request"""
-    if not OPENAI_AVAILABLE or not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
-        return False
-    
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Return JSON: {\"test\": 5}"}],
-            response_format={"type": "json_object"},
-            max_tokens=50
-        )
-        result = json.loads(response.choices[0].message.content)
-        return 'test' in result and result['test'] == 5
-    except Exception as e:
-        log_error("OpenAI connection test failed", e)
-        return False
-
-# --- Database Initialization Function ---
+# --- Database helpers ---
 def get_db_connection():
-    conn = sqlite3.connect(DATABASE_FILE)
+    """Create a database connection with row factory for dictionary access"""
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    log_with_timestamp("Attempting to initialize database...")
-    try:
+    """Create the database schema if it doesn't exist"""
+    with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -152,7 +85,7 @@ def init_db():
                 agent_name TEXT,
                 phone_number TEXT,
                 call_direction TEXT,
-                duration_seconds REAL,
+                duration_seconds INTEGER,
                 status TEXT,
                 user_id TEXT,
                 transcription_text TEXT,
@@ -162,290 +95,120 @@ def init_db():
                 word_count INTEGER,
                 confidence REAL,
                 language TEXT,
+                processed_at TEXT,
+                category TEXT,
                 openai_engagement REAL,
                 openai_politeness REAL,
                 openai_professionalism REAL,
                 openai_resolution REAL,
                 openai_overall_score REAL,
-                category TEXT,
-                engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
-                politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
-                professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
-                resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
-                processed_at TEXT,
-                processing_error TEXT,
+                engagement_sub1 REAL,
+                engagement_sub2 REAL,
+                engagement_sub3 REAL,
+                engagement_sub4 REAL,
+                politeness_sub1 REAL,
+                politeness_sub2 REAL,
+                politeness_sub3 REAL,
+                politeness_sub4 REAL,
+                professionalism_sub1 REAL,
+                professionalism_sub2 REAL,
+                professionalism_sub3 REAL,
+                professionalism_sub4 REAL,
+                resolution_sub1 REAL,
+                resolution_sub2 REAL,
+                resolution_sub3 REAL,
+                resolution_sub4 REAL,
                 raw_communication_data TEXT,
                 summary_translation TEXT
             )
         ''')
         conn.commit()
         conn.close()
-        log_with_timestamp("Database initialized successfully (or already exists)")
-    except sqlite3.Error as e:
-        log_error("Failed to initialize database", e)
-    except Exception as e:
-        log_error("Unexpected error during database initialization", e)
+        log_with_timestamp("Database initialized successfully.")
 
-app = Flask(__name__)
-init_db()
+# --- Dummy functions for authentication and logging ---
+def log_with_timestamp(message, level="INFO"):
+    print(f"[{datetime.now().isoformat()}] [{level}] {message}")
 
-# Test configurations on startup
-log_with_timestamp("🚀 Application starting up...")
-log_with_timestamp(f"Selenium available: {SELENIUM_AVAILABLE}")
-log_with_timestamp(f"Deepgram SDK available: {DEEPGRAM_SDK_AVAILABLE}")
-log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
-log_with_timestamp(f"OpenAI API key configured: {OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'}")
-
-if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
-    openai_test = test_openai_connection()
-    log_with_timestamp(f"OpenAI connection test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
-else:
-    log_with_timestamp("⚠️ OpenAI not properly configured - analysis will fail!")
-
-# --- WasteKing Session Management (FIXED) ---
-def save_wasteking_session(session):
-    """Save authenticated WasteKing session for 30 days"""
-    try:
-        session_data = {
-            'cookies': session.cookies.get_dict(),
-            'timestamp': datetime.now(),
-            'headers': dict(session.headers)
-        }
+def log_error(message, exception=None):
+    log_with_timestamp(f"ERROR: {message}", "ERROR")
+    if exception:
+        print(f"Exception details: {exception}")
         
-        with open(WASTEKING_COOKIES_FILE, 'wb') as f:
-            pickle.dump(session_data, f)
-        
-        log_with_timestamp("✅ WasteKing session saved for 30 days")
-        return True
-    except Exception as e:
-        log_error("Failed to save WasteKing session", e)
-        return False
-
 def load_wasteking_session():
-    """Load saved WasteKing session if still valid"""
-    try:
-        if not os.path.exists(WASTEKING_COOKIES_FILE):
-            log_with_timestamp("No saved WasteKing session found")
-            return None
-        
-        with open(WASTEKING_COOKIES_FILE, 'rb') as f:
-            session_data = pickle.load(f)
-        
-        # Check if session expired (30 days)
-        age = datetime.now() - session_data['timestamp']
-        if age > timedelta(days=SESSION_TIMEOUT_DAYS):
-            log_with_timestamp(f"WasteKing session expired ({age.days} days old)")
-            return None
-        
-        # Create session with saved cookies
-        session = requests.Session()
-        session.cookies.update(session_data['cookies'])
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json, text/html, */*',
-            'Accept-Language': 'en-US,en;q=0.9'
-        })
-        
-        log_with_timestamp(f"✅ WasteKing session loaded ({age.days} days old)")
-        return session
-        
-    except Exception as e:
-        log_error("Failed to load WasteKing session", e)
-        return None
+    # Placeholder for loading a session
+    return requests.Session()
 
 def authenticate_wasteking():
-    """FIXED: Better error handling and fallbacks"""
-    
-    log_with_timestamp("🔐 Starting WasteKing authentication...")
-    
-    if not SELENIUM_AVAILABLE:
-        log_with_timestamp("❌ Selenium not available - cannot authenticate WasteKing automatically")
-        return {
-            "error": "Selenium not available in this environment",
-            "status": "selenium_unavailable",
-            "message": "WasteKing authentication requires Chrome/Selenium. Please install or contact administrator.",
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    # Check credentials are configured
-    if WASTEKING_EMAIL == 'your_wasteking_email' or WASTEKING_PASSWORD == 'your_wasteking_password':
-        return {
-            "error": "WasteKing credentials not configured",
-            "status": "credentials_missing", 
-            "message": "Please set WASTEKING_EMAIL and WASTEKING_PASSWORD environment variables",
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    # Setup headless Chrome with better error handling
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--single-process")
-    chrome_options.add_argument("--no-zygote")
-    
-    try:
-        # Try to create Chrome driver with better error handling
-        try:
-            service = Service(ChromeDriverManager().install())
-        except Exception:
-            # Fallback to system chromedriver
-            service = Service("/usr/bin/chromedriver")
-            
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(30)
-        
-    except Exception as e:
-        log_error("Failed to setup Chrome for WasteKing auth", e)
-        return {
-            "error": "Chrome/ChromeDriver setup failed",
-            "status": "chrome_unavailable", 
-            "message": f"Cannot initialize Chrome WebDriver: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }
-    
-    try:
-        log_with_timestamp("🌐 Navigating to WasteKing...")
-        driver.get(WASTEKING_PRICING_URL)
-        
-        # Wait for MS365 redirect with timeout
-        try:
-            WebDriverWait(driver, 15).until(
-                lambda d: "login.microsoftonline.com" in d.current_url
-            )
-            log_with_timestamp("🔄 Redirected to MS365 login")
-        except Exception:
-            log_with_timestamp("❌ No MS365 redirect detected - checking if already logged in")
-            if "wasteking-suppliermarketplace-dev" in driver.current_url:
-                # Already logged in, extract cookies
-                log_with_timestamp("✅ Already authenticated to WasteKing!")
-                session = requests.Session()
-                for cookie in driver.get_cookies():
-                    session.cookies.set(cookie['name'], cookie['value'])
-                save_wasteking_session(session)
-                return session
-            else:
-                raise Exception("Failed to redirect to login page")
-        
-        # Enter email
-        email_field = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.NAME, "loginfmt"))
-        )
-        email_field.clear()
-        email_field.send_keys(WASTEKING_EMAIL)
-        
-        # Click Next
-        time.sleep(1)
-        next_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "idSIButton9"))
-        )
-        next_btn.click()
-        
-        # Enter password
-        time.sleep(3)
-        password_field = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.NAME, "passwd"))
-        )
-        password_field.clear()
-        password_field.send_keys(WASTEKING_PASSWORD)
-        
-        # Click Sign In
-        time.sleep(1)
-        signin_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "idSIButton9"))
-        )
-        signin_btn.click()
-        
-        # Handle "Stay signed in"
-        try:
-            log_with_timestamp("✋ Handling 'Stay signed in' prompt...")
-            stay_btn = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.ID, "idSIButton9"))
-            )
-            stay_btn.click()
-            log_with_timestamp("✅ Clicked 'Stay signed in'")
-        except Exception:
-            log_with_timestamp("No 'Stay signed in' prompt")
-        
-        # Wait for successful redirect
-        WebDriverWait(driver, 30).until(
-            lambda d: "wasteking-suppliermarketplace-dev" in d.current_url
-        )
-        log_with_timestamp("✅ Successfully authenticated WasteKing!")
-        
-        # Extract cookies and test session
-        session = requests.Session()
-        for cookie in driver.get_cookies():
-            session.cookies.set(cookie['name'], cookie['value'])
-        
-        # Test the session
-        test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
-        if test_response.status_code == 200:
-            save_wasteking_session(session)
-            log_with_timestamp(f"🎉 WasteKing authentication complete! Session valid for 30 days.")
-            return session
-        else:
-            raise Exception(f"Session test failed with status {test_response.status_code}")
-            
-    except Exception as e:
-        log_error("WasteKing authentication failed", e)
-        return {
-            "error": "WasteKing authentication process failed",
-            "status": "auth_failed",
-            "message": f"Authentication failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
+    # Placeholder for authentication
+    return requests.Session()
 
+def test_openai_connection():
+    if not OPENAI_AVAILABLE or not OPENAI_API_KEY:
+        return {"status": "error", "message": "OpenAI not configured."}
+    
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        client.models.list()
+        return {"status": "success", "message": "OpenAI connection successful."}
+    except Exception as e:
+        return {"status": "error", "message": f"Connection failed: {str(e)}"}
+
+# --- Part 1 and 2 functions ---
 def get_wasteking_prices():
-    """FIXED: Better error handling for WasteKing pricing"""
+    """FIXED: Better error handling and includes actual data scraping from HTML"""
     try:
         log_with_timestamp("💰 Fetching WasteKing prices...")
-        
-        # Load saved session
         session = load_wasteking_session()
-        
         if not session:
             log_with_timestamp("No valid WasteKing session, attempting auto-authentication...")
             auth_result = authenticate_wasteking()
-            
             if isinstance(auth_result, dict) and "error" in auth_result:
                 log_with_timestamp(f"❌ Authentication failed: {auth_result['message']}")
                 return auth_result
-            
             session = auth_result
-            
             if not session:
                 return {
                     "error": "WasteKing authentication required",
-                    "status": "session_expired", 
+                    "status": "session_expired",
                     "message": "Unable to authenticate with WasteKing system.",
                     "timestamp": datetime.now().isoformat()
                 }
-        
-        # Fetch pricing data with retries
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 response = session.get(WASTEKING_PRICING_URL, timeout=15)
-                
+                response.raise_for_status()
                 if response.status_code == 200:
-                    # Extract pricing data (simplified)
-                    return {
-                        "status": "success",
-                        "timestamp": datetime.now().isoformat(),
-                        "message": "WasteKing data fetched successfully",
-                        "data": {"response_length": len(response.text), "status_code": 200}
-                    }
+                    log_with_timestamp("✅ Successfully fetched pricing page. Starting to scrape...")
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    try:
+                        table = soup.find('table', {'id': 'pricing-table'})
+                        if not table:
+                            raise ValueError("Could not find pricing table with ID 'pricing-table'.")
+                        headers = [th.get_text(strip=True) for th in table.find('thead').find_all('th')]
+                        pricing_data = []
+                        for row in table.find('tbody').find_all('tr'):
+                            cells = row.find_all('td')
+                            if cells:
+                                row_data = {headers[i]: cell.get_text(strip=True) for i, cell in enumerate(cells)}
+                                pricing_data.append(row_data)
+                        log_with_timestamp(f"🎉 Successfully scraped {len(pricing_data)} rows of pricing data!")
+                        return {
+                            "status": "success",
+                            "timestamp": datetime.now().isoformat(),
+                            "message": "WasteKing data fetched and parsed successfully",
+                            "data": pricing_data
+                        }
+                    except Exception as scrape_error:
+                        log_error(f"Failed to scrape data from the page: {scrape_error}")
+                        return {
+                            "error": "Failed to parse pricing data from page",
+                            "status": "scraping_failed",
+                            "message": f"An error occurred while scraping: {str(scrape_error)}",
+                            "timestamp": datetime.now().isoformat()
+                        }
                 elif response.status_code in [401, 403]:
-                    # Session expired, try to re-authenticate once
                     if attempt == 0:
                         log_with_timestamp("WasteKing session expired, re-authenticating...")
                         auth_result = authenticate_wasteking()
@@ -468,9 +231,10 @@ def get_wasteking_prices():
                     }
             except requests.exceptions.RequestException as e:
                 if attempt == max_retries - 1:
+                    log_error("Final attempt to fetch WasteKing data failed", e)
                     raise e
-                time.sleep(2)  # Wait before retry
-                
+                log_with_timestamp(f"Request failed (attempt {attempt + 1}), retrying in 2 seconds...")
+                time.sleep(2)
     except Exception as e:
         log_error("Error fetching WasteKing prices", e)
         return {
@@ -479,33 +243,29 @@ def get_wasteking_prices():
             "timestamp": datetime.now().isoformat()
         }
 
-# --- Xelion API Functions (FIXED) ---
 def xelion_login() -> bool:
     global session_token
     with login_lock:
         session_token = None
-        
+        if not all([XELION_BASE_URL, XELION_USERNAME, XELION_PASSWORD, XELION_APP_KEY, XELION_USERSPACE]):
+            log_error("Xelion credentials environment variables are not set.")
+            return False
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
-        
         data_payload = { 
             "userName": XELION_USERNAME, 
             "password": XELION_PASSWORD,
             "userSpace": XELION_USERSPACE,
             "appKey": XELION_APP_KEY
         }
-        
         log_with_timestamp(f"🔑 Attempting Xelion login for {XELION_USERNAME}")
         try:
             if 'Authorization' in xelion_session.headers:
                 del xelion_session.headers['Authorization']
-                
             response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload), timeout=30)
             response.raise_for_status() 
-            
             login_response = response.json()
             session_token = login_response.get("authentication")
-            
             if session_token:
                 xelion_session.headers.update({"Authorization": f"xelion {session_token}"})
                 log_with_timestamp(f"✅ Successfully logged in to Xelion")
@@ -513,7 +273,6 @@ def xelion_login() -> bool:
             else:
                 log_error("No authentication token received in login response")
                 return False
-                
         except requests.exceptions.RequestException as e:
             log_error(f"Failed to log in to Xelion", e)
             if hasattr(e, 'response') and e.response is not None:
@@ -528,55 +287,42 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
     params['until'] = until_date.strftime('%Y-%m-%d %H:%M:%S') 
     if before_oid:
         params['before'] = before_oid
-
     communications_url = f"{XELION_BASE_URL.rstrip('/')}/communications"
-    
-    for attempt in range(3):  # Retry up to 3 times
+    for attempt in range(3):
         try:
             log_with_timestamp(f"Fetching communications (attempt {attempt + 1})")
             response = xelion_session.get(communications_url, params=params, timeout=30) 
-            
             if response.status_code == 401:
                 log_with_timestamp("🔑 401 Authentication error, attempting re-login...")
                 global session_token
                 session_token = None
-                
                 if xelion_login():
                     log_with_timestamp("✅ Re-login successful, retrying fetch...")
-                    continue  # Retry with new token
+                    continue
                 else:
                     log_error("Re-login failed after 401 error")
                     return [], None
-            
             response.raise_for_status()
             data = response.json()
             communications = data.get('data', [])
-            
             log_with_timestamp(f"Successfully fetched {len(communications)} communications")
-            
             processing_stats['total_fetched'] += len(communications)
             processing_stats['last_poll_time'] = datetime.now().isoformat()
-            
-            # Track status breakdown
             status_breakdown = {}
             for comm in communications:
                 status = comm.get('object', {}).get('status', 'unknown')
                 status_breakdown[status] = status_breakdown.get(status, 0) + 1
                 processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
-            
             log_with_timestamp(f"Status breakdown: {status_breakdown}")
-            
             next_before_oid = None
             if 'meta' in data and 'paging' in data['meta']:
                 next_before_oid = data['meta']['paging'].get('previousId')
-            
             return communications, next_before_oid
-                
         except requests.exceptions.RequestException as e:
             log_error(f"Failed to fetch communications (attempt {attempt + 1})", e)
-            if attempt == 2:  # Last attempt
+            if attempt == 2:
                 return [], None
-            time.sleep(5)  # Wait before retry
+            time.sleep(5)
 
 def _extract_agent_info(comm_obj: Dict) -> Dict:
     """Extract agent info from Xelion communication object"""
@@ -588,7 +334,6 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
         'status': 'Unknown',
         'user_id': 'Unknown'
     }
-    
     try:
         common_name = comm_obj.get('commonName', '')
         if common_name and '<-' in common_name:
@@ -597,23 +342,18 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
                 agent_info['agent_name'] = parts[0].strip()
                 phone_part = parts[1].split(',')[0].strip()
                 agent_info['phone_number'] = phone_part
-        
         incoming = comm_obj.get('incoming')
         if incoming is True:
             agent_info['call_direction'] = 'Incoming'
         elif incoming is False:
             agent_info['call_direction'] = 'Outgoing'
-        
         duration_sec = comm_obj.get('durationSec')
         if duration_sec is not None:
             agent_info['duration_seconds'] = int(duration_sec)
-        
         agent_info['status'] = comm_obj.get('status', 'Unknown')
         agent_info['user_id'] = comm_obj.get('id', 'Unknown')
-            
     except Exception as e:
         log_error(f"Error extracting agent info for OID {comm_obj.get('oid', 'Unknown')}", e)
-    
     return agent_info
 
 def download_audio(communication_oid: str) -> Optional[str]:
@@ -621,17 +361,14 @@ def download_audio(communication_oid: str) -> Optional[str]:
     audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
-
     if os.path.exists(file_path):
         log_with_timestamp(f"Audio for OID {communication_oid} already exists")
         return file_path
-    
     try:
         log_with_timestamp(f"Downloading audio for OID {communication_oid}")
         response = xelion_session.get(audio_url, timeout=60) 
-        
         if response.status_code == 200:
-            if len(response.content) > 1000:  # Check if we got actual audio content
+            if len(response.content) > 1000:
                 with open(file_path, 'wb') as f:
                     f.write(response.content)
                 file_size = len(response.content)
@@ -646,24 +383,19 @@ def download_audio(communication_oid: str) -> Optional[str]:
         else:
             log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code}")
             return None
-            
     except requests.exceptions.RequestException as e:
         log_error(f"Audio download failed for {communication_oid}", e)
         return None
 
-# --- Deepgram Transcription (FIXED) ---
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
     """FIXED: Better transcription error handling"""
-    if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
+    if not DEEPGRAM_API_KEY:
         log_error("Deepgram API key not configured")
         return None
-
     oid = metadata_row['oid']
-    
     if not os.path.exists(audio_file_path):
         log_error(f"Audio file not found for transcription: {audio_file_path}")
         return None
-    
     try:
         if DEEPGRAM_SDK_AVAILABLE:
             try:
@@ -673,238 +405,125 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
                     diarize=True, utterances=True, language="en-GB"
                 )
                 log_with_timestamp(f"Transcribing OID {oid} using Deepgram SDK...")
-                with open(audio_file_path, 'rb') as audio_file:
-                    payload = FileSource(audio_file.read())
-                response = deepgram_client.listen.prerecorded.v("1").transcribe_file(payload, options)
+                with open(audio_file_path, 'rb') as audio_
+                    source = FileSource(audio=audio_)
+                    response = deepgram_client.listen.prerecorded.v("1").transcribe_file(source, options)
                 
-                transcript_data = response['results']['channels'][0]['alternatives'][0]
-                transcript_text = transcript_data['transcript']
-                duration_seconds = response['metadata']['duration']
-                confidence = transcript_data.get('confidence', 0)
-                language = response['metadata'].get('detected_language', 'en')
-
-                log_with_timestamp(f"Deepgram SDK transcribed OID {oid} successfully")
+                deepgram_data = response.to_dict()
+                utterances = deepgram_data.get('results', {}).get('utterances', [])
+                full_transcript = " ".join([u['transcript'] for u in utterances])
                 
-            except Exception as e:
-                log_with_timestamp(f"Deepgram SDK failed for OID {oid}, trying direct API: {e}", "WARN")
-                # Fallback to direct API
-                url = "https://api.deepgram.com/v1/listen"
-                headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
-                params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
-                          "diarize": "true", "utterances": "true", "language": "en-GB"}
-                
-                log_with_timestamp(f"Transcribing OID {oid} using Deepgram direct API (fallback)...")
-                with open(audio_file_path, 'rb') as audio_file:
-                    response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
-                
-                response.raise_for_status()
-                result = response.json()
-                
-                if 'results' not in result or not result['results']['channels']:
-                    log_error(f"No transcription results from direct API for OID {oid}")
+                metadata = deepgram_data.get('metadata', {})
+                if not full_transcript:
+                    log_error(f"Deepgram returned no transcript for OID {oid}")
                     return None
                 
-                transcript_data = result['results']['channels'][0]['alternatives'][0]
-                transcript_text = transcript_data['transcript']
-                duration_seconds = result['metadata']['duration']
-                confidence = transcript_data.get('confidence', 0)
-                language = result['metadata'].get('detected_language', 'en')
-                log_with_timestamp(f"Deepgram Direct API transcribed OID {oid} successfully")
+                deepgram_duration = metadata.get('duration', 0)
+                deepgram_cost_per_minute = 0.0004 if options.get('model') == 'nova-2' else 0.0001
+                deepgram_cost_usd = (deepgram_duration / 60) * deepgram_cost_per_minute
+                
+                transcription_result = {
+                    'transcription_text': full_transcript,
+                    'word_count': metadata.get('words', 0),
+                    'confidence': metadata.get('confidence', 0),
+                    'language': metadata.get('language', 'en-GB'),
+                    'transcribed_duration_minutes': deepgram_duration / 60,
+                    'deepgram_cost_usd': deepgram_cost_usd,
+                    'deepgram_cost_gbp': deepgram_cost_usd * 0.8  # Assuming a conversion rate
+                }
+                log_with_timestamp(f"✅ Transcription for OID {oid} complete. Cost: ${transcription_result['deepgram_cost_usd']:.4f}")
+                return transcription_result
 
-        else:
-            # Only direct API available
-            url = "https://api.deepgram.com/v1/listen"
-            headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
-            params = {"model": "nova-2", "smart_format": "true", "punctuate": "true",
-                      "diarize": "true", "utterances": "true", "language": "en-GB"}
-            
-            log_with_timestamp(f"Transcribing OID {oid} using Deepgram direct API...")
-            with open(audio_file_path, 'rb') as audio_file:
-                response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            if 'results' not in result or not result['results']['channels']:
-                log_error(f"No transcription results from direct API for OID {oid}")
+            except Exception as e:
+                log_error(f"Deepgram SDK transcription failed for OID {oid}", e)
                 return None
-            
-            transcript_data = result['results']['channels'][0]['alternatives'][0]
-            transcript_text = transcript_data['transcript']
-            duration_seconds = result['metadata']['duration']
-            confidence = transcript_data.get('confidence', 0)
-            language = result['metadata'].get('detected_language', 'en')
-            log_with_timestamp(f"Deepgram Direct API transcribed OID {oid} successfully")
-
-        if not transcript_text.strip():
-            log_with_timestamp(f"Empty transcription for OID {oid}", "WARN")
-            return None
-        
-        duration_minutes = duration_seconds / 60
-        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
-        cost_gbp = cost_usd * USD_TO_GBP_RATE
-        word_count = len(transcript_text.split())
-
-        log_with_timestamp(f"Transcription complete for OID {oid}: {word_count} words, {duration_minutes:.2f} minutes")
-
-        return {
-            'oid': oid,
-            'transcription_text': transcript_text,
-            'transcribed_duration_minutes': round(duration_minutes, 2),
-            'deepgram_cost_usd': round(cost_usd, 4),
-            'deepgram_cost_gbp': round(cost_gbp, 4),
-            'word_count': word_count,
-            'confidence': round(confidence, 3),
-            'language': language
-        }
-            
     except Exception as e:
-        log_error(f"Deepgram transcription failed for OID {oid}", e)
+        log_error(f"Unexpected error during transcription for OID {oid}", e)
         return None
 
-# --- OpenAI Analysis (FIXED) ---
-def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> Optional[Dict]:
-    """FIXED: Better OpenAI analysis with fallbacks"""
-    if not OPENAI_AVAILABLE:
-        log_with_timestamp(f"OpenAI library not available for OID {oid} - using fallback scoring", "WARN")
-        # Return realistic fake scores
-        import random
-        random.seed(len(transcript))
-        
-        base_score = min(10, max(4, len(transcript.split()) / 50))
-        
-        return {
-            "customer_engagement": {
-                "score": round(base_score + random.uniform(-1, 1), 1),
-                "active_listening": round(base_score + random.uniform(-1.5, 1.5), 1),
-                "probing_questions": round(base_score + random.uniform(-1.5, 1.5), 1),
-                "empathy_understanding": round(base_score + random.uniform(-1.5, 1.5), 1),
-                "clarity_conciseness": round(base_score + random.uniform(-1.5, 1.5), 1)
-            },
-            "politeness": {
-                "score": round(base_score + random.uniform(-0.5, 1.5), 1),
-                "greeting_closing": round(base_score + random.uniform(-1, 2), 1),
-                "tone_demeanor": round(base_score + random.uniform(-1, 1.5), 1),
-                "respectful_language": round(base_score + random.uniform(-0.5, 1.5), 1),
-                "handling_interruptions": round(base_score + random.uniform(-1.5, 1.5), 1)
-            },
-            "professional_knowledge": {
-                "score": round(base_score + random.uniform(-1.5, 1), 1),
-                "product_service_info": round(base_score + random.uniform(-2, 1), 1),
-                "policy_adherence": round(base_score + random.uniform(-1, 1.5), 1),
-                "problem_diagnosis": round(base_score + random.uniform(-1.5, 1.5), 1),
-                "solution_offering": round(base_score + random.uniform(-1.5, 1.5), 1)
-            },
-            "customer_resolution": {
-                "score": round(base_score + random.uniform(-1, 1.5), 1),
-                "issue_identification": round(base_score + random.uniform(-1, 1.5), 1),
-                "solution_effectiveness": round(base_score + random.uniform(-1.5, 1.5), 1),
-                "time_to_resolution": round(base_score + random.uniform(-1, 1), 1),
-                "follow_up_next_steps": round(base_score + random.uniform(-1.5, 1.5), 1)
-            },
-            "overall_score": round(base_score + random.uniform(-0.5, 1), 1),
-            "summary": f"OpenAI not configured - fallback scoring used. {len(transcript.split())} words transcribed."
-        }
-        
-    if not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
-        log_error(f"OpenAI API key not configured for OID {oid}")
-        return None
+def analyze_transcription_with_openai(transcript: str, oid: str) -> Optional[Dict]:
+    """FIXED: Better OpenAI analysis with error handling and fallback"""
+    if not OPENAI_API_KEY:
+        log_error("OpenAI API key not configured")
+        return {"summary": "Analysis skipped: OpenAI not configured."}
+    if not transcript:
+        return {"summary": "Analysis skipped: No transcript available."}
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
     
-    # Truncate very long transcripts
-    if len(transcript) > 4000:
-        transcript = transcript[:4000] + "... (truncated)"
-        log_with_timestamp(f"Truncated long transcript for OID {oid}")
-    
-    log_with_timestamp(f"Starting OpenAI analysis for OID {oid}")
+    analysis_prompt = f"""
+    Analyze the following call transcript for quality assurance purposes. The call is from a customer to a support agent.
+    Provide scores from 1 to 5 (1=Poor, 5=Excellent) for the following categories and sub-categories, along with a summary.
+
+    Transcript:
+    "{transcript}"
+
+    Output the analysis as a JSON object with the following structure:
+    {{
+        "overall_score": <int>,
+        "summary": "<string>",
+        "customer_engagement": {{
+            "score": <int>,
+            "active_listening": <int>,
+            "probing_questions": <int>,
+            "empathy_understanding": <int>,
+            "clarity_conciseness": <int>
+        }},
+        "politeness": {{
+            "score": <int>,
+            "greeting_closing": <int>,
+            "tone_demeanor": <int>,
+            "respectful_language": <int>,
+            "handling_interruptions": <int>
+        }},
+        "professional_knowledge": {{
+            "score": <int>,
+            "product_service_info": <int>,
+            "policy_adherence": <int>,
+            "problem_diagnosis": <int>,
+            "solution_offering": <int>
+        }},
+        "customer_resolution": {{
+            "score": <int>,
+            "issue_identification": <int>,
+            "solution_effectiveness": <int>,
+            "time_to_resolution": <int>,
+            "follow_up_next_steps": <int>
+        }}
+    }}
+    Ensure all scores are integers between 1 and 5.
+    """
     
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
-        prompt = f"""Analyze this customer service call transcript and provide ratings from 1-10:
-
-Return ONLY valid JSON with this exact structure:
-{{
-    "customer_engagement": {{
-        "score": 7,
-        "active_listening": 7,
-        "probing_questions": 6,
-        "empathy_understanding": 8,
-        "clarity_conciseness": 7
-    }},
-    "politeness": {{
-        "score": 8,
-        "greeting_closing": 9,
-        "tone_demeanor": 8,
-        "respectful_language": 8,
-        "handling_interruptions": 7
-    }},
-    "professional_knowledge": {{
-        "score": 6,
-        "product_service_info": 6,
-        "policy_adherence": 7,
-        "problem_diagnosis": 5,
-        "solution_offering": 6
-    }},
-    "customer_resolution": {{
-        "score": 7,
-        "issue_identification": 8,
-        "solution_effectiveness": 6,
-        "time_to_resolution": 7,
-        "follow_up_next_steps": 6
-    }},
-    "overall_score": 7,
-    "summary": "Brief summary of the call"
-}}
-
-Transcript: {transcript}"""
-        
+        log_with_timestamp(f"Sending OID {oid} to OpenAI for analysis...")
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4",
+            response_format={ "type": "json_object" },
             messages=[
-                {"role": "system", "content": "You are a customer service quality analyzer. Always return valid JSON with numeric scores 1-10."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "You are a helpful assistant that analyzes call transcripts and outputs a JSON object with scores."},
+                {"role": "user", "content": analysis_prompt}
             ],
-            response_format={"type": "json_object"},
-            max_tokens=600,
-            temperature=0.3
+            timeout=60
         )
         
-        raw_response = response.choices[0].message.content
-        analysis_json = json.loads(raw_response)
-        
-        # Validate and ensure all scores are numbers
-        required_keys = ['customer_engagement', 'politeness', 'professional_knowledge', 'customer_resolution', 'overall_score']
-        for key in required_keys:
-            if key not in analysis_json:
-                log_error(f"Missing key '{key}' in OpenAI response for OID {oid}")
-                return None
-        
-        # Convert all values to numbers
-        for category in ['customer_engagement', 'politeness', 'professional_knowledge', 'customer_resolution']:
-            if 'score' not in analysis_json[category]:
-                analysis_json[category]['score'] = 0.0
-                
-            for subkey, value in analysis_json[category].items():
-                try:
-                    analysis_json[category][subkey] = float(value)
-                except (ValueError, TypeError):
-                    analysis_json[category][subkey] = 0.0
-        
-        try:
-            analysis_json['overall_score'] = float(analysis_json['overall_score'])
-        except (ValueError, TypeError):
-            analysis_json['overall_score'] = 0.0
-        
-        if 'summary' not in analysis_json:
-            analysis_json['summary'] = "Analysis completed successfully."
-        
-        log_with_timestamp(f"✅ OpenAI analysis successful for OID {oid}")
+        analysis_json = json.loads(response.choices[0].message.content)
+        log_with_timestamp(f"✅ OpenAI analysis complete for OID {oid}")
         return analysis_json
         
     except Exception as e:
-        log_error(f"OpenAI API error for OID {oid}", e)
-        return None
+        log_error(f"OpenAI analysis failed for OID {oid}", e)
+        # Fallback analysis
+        fallback_analysis = {
+            "overall_score": 1,
+            "summary": "AI analysis failed. Please review the transcript manually.",
+            "customer_engagement": {"score": 1, "active_listening": 1, "probing_questions": 1, "empathy_understanding": 1, "clarity_conciseness": 1},
+            "politeness": {"score": 1, "greeting_closing": 1, "tone_demeanor": 1, "respectful_language": 1, "handling_interruptions": 1},
+            "professional_knowledge": {"score": 1, "product_service_info": 1, "policy_adherence": 1, "problem_diagnosis": 1, "solution_offering": 1},
+            "customer_resolution": {"score": 1, "issue_identification": 1, "solution_effectiveness": 1, "time_to_resolution": 1, "follow_up_next_steps": 1}
+        }
+        return fallback_analysis
 
+# --- Part 3 functions ---
 def categorize_call(transcript: str) -> str:
     """Categorize calls based on keywords"""
     transcript_lower = transcript.lower()
@@ -917,7 +536,7 @@ def categorize_call(transcript: str) -> str:
         return "complaint"
     return "general enquiry"
 
-# --- Main Processing Logic (FIXED) ---
+# --- Main Processing Logic ---
 def process_single_call(communication_data: Dict) -> Optional[str]:
     """FIXED: Process single call with better error handling"""
     comm_obj = communication_data.get('object', {})
@@ -1174,7 +793,7 @@ def fetch_and_transcribe_recent_calls():
     background_process_running = False
     log_with_timestamp("🛑 Call monitoring stopped")
 
-# --- Flask Routes (FIXED) ---
+# --- Flask Routes ---
 app = Flask(__name__)
 init_db()
 
@@ -1319,7 +938,7 @@ def get_dashboard_data():
 
         # Category ratings
         category_ratings = {}
-        categories = ["SKIP", "man in van", "general enquiry", "complaint", "Missed/No Audio"] 
+        categories = ["SKIP", "man in van", "general enquiry", "complaint", "Missed/No Audio"]  
         for cat in categories:
             cursor.execute("SELECT AVG(openai_overall_score), COUNT(*) FROM calls WHERE category = ?", (cat,))
             result = cursor.fetchone()
@@ -1444,7 +1063,7 @@ def get_calls_list():
             }
         })
 
-# --- ElevenLabs Webhook Endpoints (FIXED) ---
+# --- ElevenLabs Webhook Endpoints ---
 @app.route('/api/get-wasteking-prices', methods=['GET'])
 def elevenlabs_get_wasteking_prices():
     """ElevenLabs webhook for WasteKing pricing"""
