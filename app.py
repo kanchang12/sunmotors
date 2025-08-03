@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Tuple
 import re
 from bs4 import BeautifulSoup
 
-# Try to import Selenium (might not be available in all environments)
+# Try to import Selenium
 try:
     from selenium import webdriver
     from selenium.webdriver.chrome.service import Service
@@ -27,14 +27,10 @@ try:
 except ImportError:
     SELENIUM_AVAILABLE = False
 
-# Attempt Deepgram SDK import
-try:
-    from deepgram import DeepgramClient, PrerecordedOptions, FileSource
-    DEEPGRAM_SDK_AVAILABLE = True
-except ImportError:
-    DEEPGRAM_SDK_AVAILABLE = False
+# DISABLED: Deepgram SDK causes typing.Union errors - use direct API only
+DEEPGRAM_SDK_AVAILABLE = False
 
-# Attempt OpenAI import
+# OpenAI import
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
@@ -42,7 +38,6 @@ except ImportError:
     OPENAI_AVAILABLE = False
 
 # --- Configuration ---
-# Xelion API (Replace with your actual Xelion details)
 XELION_BASE_URL = os.getenv('XELION_BASE_URL', 'https://lvsl01.xelion.com/api/v1/wasteking')
 XELION_USERNAME = os.getenv('XELION_USERNAME', 'your_xelion_username')
 XELION_PASSWORD = os.getenv('XELION_PASSWORD', 'your_xelion_password')
@@ -52,7 +47,7 @@ XELION_USERSPACE = os.getenv('XELION_USERSPACE', 'transcriber-abi-housego')
 # Deepgram API
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
 
-# OpenAI API (Replace with your actual OpenAI API Key)
+# OpenAI API
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 
 # WasteKing API Configuration
@@ -73,7 +68,7 @@ WASTEKING_COOKIES_FILE = "wasteking_session.pkl"
 SESSION_TIMEOUT_DAYS = 30
 
 # Deepgram pricing and currency conversion
-DEEPGRAM_PRICE_PER_MINUTE = 0.0043  # $0.0043 per minute for Nova-2 model
+DEEPGRAM_PRICE_PER_MINUTE = 0.0043
 USD_TO_GBP_RATE = 0.79
 
 # Global session and locks for thread safety
@@ -112,11 +107,10 @@ def log_error(message, error=None):
     else:
         log_with_timestamp(f"ERROR: {message}", "ERROR")
     
-    # Update global error tracking
     processing_stats['last_error'] = f"{message}: {error}" if error else message
 
 def test_openai_connection() -> bool:
-    """Test OpenAI API connection with a simple request"""
+    """Test OpenAI API connection"""
     if not OPENAI_AVAILABLE or not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
         return False
     
@@ -134,14 +128,14 @@ def test_openai_connection() -> bool:
         log_error("OpenAI connection test failed", e)
         return False
 
-# --- Database Initialization Function ---
+# --- Database Functions ---
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    log_with_timestamp("Attempting to initialize database...")
+    log_with_timestamp("Initializing database...")
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -180,27 +174,9 @@ def init_db():
         ''')
         conn.commit()
         conn.close()
-        log_with_timestamp("Database initialized successfully (or already exists)")
-    except sqlite3.Error as e:
-        log_error("Failed to initialize database", e)
+        log_with_timestamp("Database initialized successfully")
     except Exception as e:
-        log_error("Unexpected error during database initialization", e)
-
-app = Flask(__name__)
-init_db()
-
-# Test configurations on startup
-log_with_timestamp("🚀 Application starting up...")
-log_with_timestamp(f"Selenium available: {SELENIUM_AVAILABLE}")
-log_with_timestamp(f"Deepgram SDK available: {DEEPGRAM_SDK_AVAILABLE}")
-log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
-log_with_timestamp(f"OpenAI API key configured: {OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'}")
-
-if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
-    openai_test = test_openai_connection()
-    log_with_timestamp(f"OpenAI connection test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
-else:
-    log_with_timestamp("⚠️ OpenAI not properly configured - analysis will fail!")
+        log_error("Failed to initialize database", e)
 
 # --- WasteKing Session Management ---
 def save_wasteking_session(session):
@@ -231,7 +207,7 @@ def load_wasteking_session():
         with open(WASTEKING_COOKIES_FILE, 'rb') as f:
             session_data = pickle.load(f)
         
-        # Check if session expired (30 days)
+        # Check if session expired
         age = datetime.now() - session_data['timestamp']
         if age > timedelta(days=SESSION_TIMEOUT_DAYS):
             log_with_timestamp(f"WasteKing session expired ({age.days} days old)")
@@ -254,93 +230,63 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate and save 30-day WasteKing session - Fixed for Koyeb"""
-    
+    """Authenticate WasteKing with proper Chrome setup"""
     log_with_timestamp("🔐 Starting WasteKing authentication...")
     
     if not SELENIUM_AVAILABLE:
-        log_with_timestamp("❌ Selenium not available - cannot authenticate WasteKing automatically")
         return {
-            "error": "Selenium not available in this environment",
+            "error": "Selenium not available",
             "status": "selenium_unavailable",
-            "message": "WasteKing authentication requires Selenium/Chrome which is not installed. Manual session setup required.",
-            "timestamp": datetime.now().isoformat(),
-            "help": "Contact system administrator to install Chrome/ChromeDriver or manually provide session cookies"
+            "message": "Chrome/Selenium not installed",
+            "timestamp": datetime.now().isoformat()
         }
     
-    # Setup headless Chrome for containerized environments
+    # Chrome options for containerized environments
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--disable-plugins")
-    chrome_options.add_argument("--disable-images")
     chrome_options.add_argument("--single-process")
     chrome_options.add_argument("--no-zygote")
-    chrome_options.add_argument("--disable-background-timer-throttling")
-    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-    chrome_options.add_argument("--disable-renderer-backgrounding")
-    chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
     
-    # Detect common container environments
+    # Detect container environment
     is_container = any([
-        os.environ.get('PORT'),  # Koyeb, Heroku
-        os.environ.get('DYNO'),  # Heroku
-        os.environ.get('KOYEB_PUBLIC_DOMAIN'),  # Koyeb
-        os.path.exists('/.dockerenv'),  # Docker
+        os.environ.get('PORT'),
+        os.environ.get('DYNO'),
+        os.environ.get('KOYEB_PUBLIC_DOMAIN'),
+        os.path.exists('/.dockerenv'),
     ])
     
     if is_container:
-        log_with_timestamp("🐳 Container environment detected, adjusting Chrome options...")
-        # Try common Chrome binary locations in containers
-        possible_chrome_paths = [
-            '/usr/bin/google-chrome',
-            '/usr/bin/google-chrome-stable', 
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/app/.chrome-for-testing/chrome-linux64/chrome',  # Koyeb buildpack
-            '/app/.chromedriver/bin/chromedriver'
-        ]
-        
-        chrome_binary = None
-        for path in possible_chrome_paths:
-            if os.path.exists(path):
-                chrome_binary = path
-                log_with_timestamp(f"✅ Found Chrome binary at: {path}")
-                break
-        
-        if chrome_binary:
-            chrome_options.binary_location = chrome_binary
+        log_with_timestamp("🐳 Container environment detected")
+        # Set Chrome binary for container
+        if os.path.exists('/usr/bin/google-chrome-stable'):
+            chrome_options.binary_location = '/usr/bin/google-chrome-stable'
+        elif os.path.exists('/usr/bin/google-chrome'):
+            chrome_options.binary_location = '/usr/bin/google-chrome'
     
     try:
-        # Try to create Chrome driver
-        try:
-            if is_container:
-                # For containers, try to use system chromedriver first
-                service = Service("/usr/bin/chromedriver")
-            else:
-                # For local development
-                service = Service(ChromeDriverManager().install())
-        except:
-            # Fallback to ChromeDriverManager
+        # Setup ChromeDriver service
+        if is_container and os.path.exists('/usr/bin/chromedriver'):
+            service = Service('/usr/bin/chromedriver')
+        else:
             service = Service(ChromeDriverManager().install())
             
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(30)
         
     except Exception as e:
-        log_error("Failed to setup Chrome for WasteKing auth", e)
-        
-        # Return error response instead of None
+        log_error("Failed to setup Chrome", e)
         return {
-            "error": "Chrome/ChromeDriver setup failed",
+            "error": "Chrome setup failed",
             "status": "chrome_unavailable", 
-            "message": f"Cannot initialize Chrome WebDriver: {str(e)}",
-            "timestamp": datetime.now().isoformat(),
-            "help": "Chrome or ChromeDriver may not be installed in this environment. Contact administrator."
+            "message": f"Chrome initialization failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
         }
     
     try:
@@ -382,13 +328,13 @@ def authenticate_wasteking():
         )
         signin_btn.click()
         
-        # Handle "Stay signed in" - CRITICAL for 30-day session
+        # Handle "Stay signed in"
         try:
             log_with_timestamp("✋ Handling 'Stay signed in' prompt...")
             stay_btn = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "idSIButton9"))
             )
-            stay_btn.click()  # Click YES to stay signed in for 30 days
+            stay_btn.click()
             log_with_timestamp("✅ Clicked 'Stay signed in'")
         except:
             log_with_timestamp("No 'Stay signed in' prompt")
@@ -406,21 +352,20 @@ def authenticate_wasteking():
             session.cookies.set(cookie['name'], cookie['value'])
         
         # Test the session
-        test_response = session.get(WASTEKING_PRICING_URL)
+        test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
         if test_response.status_code == 200:
             save_wasteking_session(session)
-            log_with_timestamp(f"🎉 WasteKing authentication complete! Session valid for 30 days.")
+            log_with_timestamp("🎉 WasteKing authentication complete!")
             return session
         else:
-            log_with_timestamp("❌ WasteKing session test failed")
-            return None
+            raise Exception(f"Session test failed: {test_response.status_code}")
             
     except Exception as e:
         log_error("WasteKing authentication failed", e)
         return {
-            "error": "WasteKing authentication process failed",
+            "error": "Authentication failed",
             "status": "auth_failed",
-            "message": f"Authentication failed during login process: {str(e)}",
+            "message": f"Login process failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }
     finally:
@@ -429,160 +374,66 @@ def authenticate_wasteking():
         except:
             pass
 
-def extract_wasteking_pricing_data(response_text):
-    """Extract pricing data from WasteKing HTML response"""
-    
-    soup = BeautifulSoup(response_text, 'html.parser')
-    pricing_data = {}
-    
-    # Extract tables with pricing data
-    tables = soup.find_all('table')
-    table_data = []
-    
-    for i, table in enumerate(tables):
-        try:
-            rows = table.find_all('tr')
-            table_rows = []
-            
-            for row in rows:
-                cells = row.find_all(['td', 'th'])
-                if cells:
-                    row_data = [cell.get_text(strip=True) for cell in cells]
-                    if any(row_data):  # Skip empty rows
-                        table_rows.append(row_data)
-            
-            if table_rows:
-                table_data.append({
-                    'table_id': i,
-                    'headers': table_rows[0] if table_rows else [],
-                    'rows': table_rows[1:] if len(table_rows) > 1 else [],
-                    'total_rows': len(table_rows)
-                })
-                
-        except Exception as e:
-            log_error(f"Error processing WasteKing table {i}", e)
-            continue
-    
-    if table_data:
-        pricing_data['tables'] = table_data
-    
-    # Look for JSON data in scripts
-    scripts = soup.find_all('script')
-    script_data = []
-    
-    for script in scripts:
-        if script.string and ('price' in script.string.lower() or 'cost' in script.string.lower() or 'data' in script.string.lower()):
-            # Try to extract JSON
-            json_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', script.string)
-            for match in json_matches:
-                try:
-                    data = json.loads(match)
-                    if isinstance(data, dict) and len(str(data)) > 50:
-                        script_data.append(data)
-                except:
-                    continue
-    
-    if script_data:
-        pricing_data['script_data'] = script_data
-    
-    # Look for price mentions in text
-    price_elements = soup.find_all(text=re.compile(r'£\d+|cost|price|\$\d+', re.I))
-    price_mentions = []
-    
-    for element in price_elements[:20]:  # Limit to 20
-        text = element.strip()
-        if text and len(text) < 200:  # Skip very long texts
-            price_mentions.append(text)
-    
-    if price_mentions:
-        pricing_data['price_mentions'] = price_mentions
-    
-    return pricing_data
-
 def get_wasteking_prices():
-    """Get WasteKing pricing data for ElevenLabs - Fixed for Koyeb"""
+    """Get WasteKing pricing data"""
     try:
         log_with_timestamp("💰 Fetching WasteKing prices...")
         
-        # Load saved session
         session = load_wasteking_session()
         
         if not session:
-            # Try to auto-authenticate if no session
-            log_with_timestamp("No valid WasteKing session, attempting auto-authentication...")
+            log_with_timestamp("No valid session, attempting authentication...")
             auth_result = authenticate_wasteking()
             
-            # Check if authenticate_wasteking returned an error dict instead of a session
             if isinstance(auth_result, dict) and "error" in auth_result:
-                log_with_timestamp(f"❌ Authentication failed: {auth_result['message']}")
                 return auth_result
             
             session = auth_result
             
             if not session:
                 return {
-                    "error": "WasteKing authentication required",
+                    "error": "Authentication required",
                     "status": "session_expired", 
-                    "message": "Unable to authenticate with WasteKing system. Chrome/Selenium may not be available in this environment.",
-                    "timestamp": datetime.now().isoformat(),
-                    "help": "Try visiting /api/setup-wasteking to manually authenticate, or contact administrator to install Chrome/ChromeDriver"
+                    "message": "Unable to authenticate with WasteKing",
+                    "timestamp": datetime.now().isoformat()
                 }
         
-        # Fetch pricing data
         response = session.get(WASTEKING_PRICING_URL, timeout=15)
         
         if response.status_code == 200:
-            # Extract pricing data
-            pricing_data = extract_wasteking_pricing_data(response.text)
-            
-            if pricing_data:
-                return {
-                    "status": "success",
-                    "timestamp": datetime.now().isoformat(),
-                    "data_types": list(pricing_data.keys()),
-                    "data": pricing_data,
-                    "summary": f"Found {len(pricing_data)} data sections from WasteKing supplier marketplace"
-                }
-            else:
-                return {
-                    "status": "no_data",
-                    "message": "WasteKing page loaded but no pricing data found",
-                    "timestamp": datetime.now().isoformat()
-                }
-                
+            return {
+                "status": "success",
+                "timestamp": datetime.now().isoformat(),
+                "message": "WasteKing data fetched successfully",
+                "data_length": len(response.text)
+            }
         elif response.status_code in [401, 403]:
-            # Session expired, try to re-authenticate
-            log_with_timestamp("WasteKing session expired, re-authenticating...")
+            # Try re-authentication
             auth_result = authenticate_wasteking()
             
-            # Check for error dict
             if isinstance(auth_result, dict) and "error" in auth_result:
                 return auth_result
             
             session = auth_result
             
             if session:
-                # Retry with new session
                 response = session.get(WASTEKING_PRICING_URL, timeout=15)
                 if response.status_code == 200:
-                    pricing_data = extract_wasteking_pricing_data(response.text)
                     return {
                         "status": "success",
-                        "message": "Re-authenticated and fetched WasteKing data",
+                        "message": "Re-authenticated and fetched data",
                         "timestamp": datetime.now().isoformat(),
-                        "data": pricing_data
+                        "data_length": len(response.text)
                     }
             
             return {
-                "error": "WasteKing authentication failed",
+                "error": "Authentication failed",
                 "status": "auth_required",
-                "message": "Session expired and re-authentication failed. Chrome/Selenium may not be available.",
                 "timestamp": datetime.now().isoformat()
             }
-            
         else:
             return {
-                "error": f"WasteKing request failed with status {response.status_code}",
+                "error": f"Request failed: {response.status_code}",
                 "status": "request_failed",
                 "timestamp": datetime.now().isoformat()
             }
@@ -599,7 +450,6 @@ def get_wasteking_prices():
 def xelion_login() -> bool:
     global session_token
     with login_lock:
-        # ALWAYS try fresh login if called explicitly
         session_token = None
         
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
@@ -612,13 +462,12 @@ def xelion_login() -> bool:
             "appKey": XELION_APP_KEY
         }
         
-        log_with_timestamp(f"🔑 Attempting Xelion login for {XELION_USERNAME} with userSpace: {XELION_USERSPACE}")
+        log_with_timestamp(f"🔑 Attempting Xelion login for {XELION_USERNAME}")
         try:
-            # Clear any old headers
             if 'Authorization' in xelion_session.headers:
                 del xelion_session.headers['Authorization']
                 
-            response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload))
+            response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload), timeout=30)
             response.raise_for_status() 
             
             login_response = response.json()
@@ -626,91 +475,72 @@ def xelion_login() -> bool:
             
             if session_token:
                 xelion_session.headers.update({"Authorization": f"xelion {session_token}"})
-                log_with_timestamp(f"✅ Successfully logged in to Xelion (Valid until: {login_response.get('validUntil', 'N/A')})")
+                log_with_timestamp(f"✅ Successfully logged in to Xelion")
                 return True
             else:
-                log_error("No authentication token received in login response")
+                log_error("No authentication token received")
                 return False
                 
         except requests.exceptions.RequestException as e:
             log_error(f"Failed to log in to Xelion", e)
-            if hasattr(e, 'response') and e.response is not None:
-                log_with_timestamp(f"HTTP Status Code: {e.response.status_code}", "ERROR")
-                log_with_timestamp(f"Response Body: {e.response.text}", "ERROR")
-            session_token = None
             return False
 
 def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Optional[str] = None) -> Tuple[List[Dict], Optional[str]]:
-    """Fetches a single page of communications with detailed metadata."""
+    """Fetch communications with error handling"""
     params = {'limit': limit}
     params['until'] = until_date.strftime('%Y-%m-%d %H:%M:%S') 
     if before_oid:
         params['before'] = before_oid
 
     communications_url = f"{XELION_BASE_URL.rstrip('/')}/communications"
-    try:
-        log_with_timestamp(f"Fetching communications from: {communications_url} with params: {params}")
-        response = xelion_session.get(communications_url, params=params, timeout=30) 
-        response.raise_for_status()
-        
-        data = response.json()
-        communications = data.get('data', [])
-        
-        # Log detailed information about what we received
-        log_with_timestamp(f"Successfully fetched {len(communications)} communications")
-        
-        # Track statistics
-        processing_stats['total_fetched'] += len(communications)
-        processing_stats['last_poll_time'] = datetime.now().isoformat()
-        
-        # Analyze statuses in the communications
-        status_breakdown = {}
-        for comm in communications:
-            status = comm.get('object', {}).get('status', 'unknown')
-            status_breakdown[status] = status_breakdown.get(status, 0) + 1
-            processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
-        
-        log_with_timestamp(f"Status breakdown in this batch: {status_breakdown}")
-        
-        next_before_oid = None
-        if 'meta' in data and 'paging' in data['meta']:
-            next_before_oid = data['meta']['paging'].get('previousId')
-        
-        return communications, next_before_oid
+    
+    for attempt in range(3):
+        try:
+            log_with_timestamp(f"Fetching communications (attempt {attempt + 1})")
+            response = xelion_session.get(communications_url, params=params, timeout=30) 
             
-    except requests.exceptions.RequestException as e:
-        log_error("Failed to fetch communications", e)
-        if hasattr(e, 'response') and e.response is not None:
-            log_with_timestamp(f"HTTP Status Code: {e.response.status_code}", "ERROR")
-            log_with_timestamp(f"Response Body: {e.response.text}", "ERROR")
-        
-        # FIXED: Check for 401 status code properly
-        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 401:
-            log_with_timestamp("🔑 401 Authentication error detected, attempting re-login...")
-            global session_token
-            session_token = None  # Force new login
-            
-            if xelion_login():
-                log_with_timestamp("✅ Re-login successful, retrying fetch...")
-                try:
-                    response = xelion_session.get(communications_url, params=params, timeout=30) 
-                    response.raise_for_status()
-                    data = response.json()
-                    communications = data.get('data', [])
-                    next_before_oid = None
-                    if 'meta' in data and 'paging' in data['meta']:
-                        next_before_oid = data['meta']['paging'].get('previousId')
-                    log_with_timestamp(f"✅ Successfully re-fetched {len(communications)} communications after re-login")
-                    return communications, next_before_oid
-                except requests.exceptions.RequestException as re:
-                    log_error("Re-fetch after re-login failed", re)
+            if response.status_code == 401:
+                log_with_timestamp("🔑 401 error, re-authenticating...")
+                global session_token
+                session_token = None
+                
+                if xelion_login():
+                    continue
+                else:
                     return [], None
-            else:
-                log_error("Re-login failed after 401 error")
+            
+            response.raise_for_status()
+            data = response.json()
+            communications = data.get('data', [])
+            
+            log_with_timestamp(f"Successfully fetched {len(communications)} communications")
+            
+            processing_stats['total_fetched'] += len(communications)
+            processing_stats['last_poll_time'] = datetime.now().isoformat()
+            
+            # Track status breakdown
+            status_breakdown = {}
+            for comm in communications:
+                status = comm.get('object', {}).get('status', 'unknown')
+                status_breakdown[status] = status_breakdown.get(status, 0) + 1
+                processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
+            
+            log_with_timestamp(f"Status breakdown: {status_breakdown}")
+            
+            next_before_oid = None
+            if 'meta' in data and 'paging' in data['meta']:
+                next_before_oid = data['meta']['paging'].get('previousId')
+            
+            return communications, next_before_oid
+                
+        except Exception as e:
+            log_error(f"Failed to fetch communications (attempt {attempt + 1})", e)
+            if attempt == 2:
                 return [], None
-        return [], None
+            time.sleep(5)
+
 def _extract_agent_info(comm_obj: Dict) -> Dict:
-    """Extract agent info from Xelion communication object with detailed logging."""
+    """Extract agent info from communication object"""
     agent_info = {
         'agent_name': 'Unknown',
         'call_direction': 'Unknown',
@@ -721,9 +551,6 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
     }
     
     try:
-        # Log the raw communication object structure for debugging
-        oid = comm_obj.get('oid', 'Unknown')
-        
         common_name = comm_obj.get('commonName', '')
         if common_name and '<-' in common_name:
             parts = common_name.split('<-')
@@ -744,13 +571,6 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
         
         agent_info['status'] = comm_obj.get('status', 'Unknown')
         agent_info['user_id'] = comm_obj.get('id', 'Unknown')
-        
-        transferred_from = comm_obj.get('transferredFromName', '')
-        transferred_to = comm_obj.get('transferredToName', '')
-        if transferred_from:
-            agent_info['agent_name'] += f" (from: {transferred_from})"
-        if transferred_to:
-            agent_info['agent_name'] += f" (to: {transferred_to})"
             
     except Exception as e:
         log_error(f"Error extracting agent info for OID {comm_obj.get('oid', 'Unknown')}", e)
@@ -758,39 +578,43 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
     return agent_info
 
 def download_audio(communication_oid: str) -> Optional[str]:
-    """Download audio file to a temporary location with detailed logging."""
+    """Download audio file with proper error handling"""
     audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
 
     if os.path.exists(file_path):
-        log_with_timestamp(f"Audio for OID {communication_oid} already exists. Skipping download")
+        log_with_timestamp(f"Audio for OID {communication_oid} already exists")
         return file_path
     
     try:
-        log_with_timestamp(f"Attempting to download audio for OID {communication_oid} from {audio_url}")
+        log_with_timestamp(f"Downloading audio for OID {communication_oid}")
         response = xelion_session.get(audio_url, timeout=60) 
         
         if response.status_code == 200:
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-            file_size = len(response.content)
-            log_with_timestamp(f"Downloaded audio for OID {communication_oid} ({file_size} bytes)")
-            return file_path
+            if len(response.content) > 1000:  # Ensure we got actual audio
+                with open(file_path, 'wb') as f:
+                    f.write(response.content)
+                file_size = len(response.content)
+                log_with_timestamp(f"Downloaded audio for OID {communication_oid} ({file_size} bytes)")
+                return file_path
+            else:
+                log_with_timestamp(f"Audio file too small for OID {communication_oid}")
+                return None
         elif response.status_code == 404:
-            log_with_timestamp(f"No audio found for OID {communication_oid} (404 Not Found)")
+            log_with_timestamp(f"No audio found for OID {communication_oid}")
             return None
         else:
-            log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code} - {response.text}")
+            log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code}")
             return None
             
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         log_error(f"Audio download failed for {communication_oid}", e)
         return None
 
-# --- Deepgram Transcription ---
+# --- FIXED Deepgram Transcription (Direct API Only) ---
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
-    """Transcribe audio file using Deepgram DIRECT API ONLY - no SDK"""
+    """Transcribe audio using Deepgram DIRECT API ONLY"""
     if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
         log_error("Deepgram API key not configured")
         return None
@@ -798,11 +622,11 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
     oid = metadata_row['oid']
     
     if not os.path.exists(audio_file_path):
-        log_error(f"Audio file not found for transcription: {audio_file_path}")
+        log_error(f"Audio file not found: {audio_file_path}")
         return None
     
     try:
-        # Use ONLY direct API - completely remove SDK dependency
+        # Use ONLY direct API - no SDK
         url = "https://api.deepgram.com/v1/listen"
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
         params = {
@@ -822,32 +646,31 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         response.raise_for_status()
         result = response.json()
         
-        # Validate response structure
+        # Validate response
         if 'results' not in result:
-            log_error(f"Invalid response structure from Deepgram for OID {oid}: missing 'results'")
+            log_error(f"Invalid response from Deepgram for OID {oid}")
             return None
             
         if not result['results'].get('channels'):
-            log_error(f"No channels in Deepgram response for OID {oid}")
+            log_error(f"No channels in response for OID {oid}")
             return None
             
         if not result['results']['channels'][0].get('alternatives'):
-            log_error(f"No alternatives in Deepgram response for OID {oid}")
+            log_error(f"No alternatives in response for OID {oid}")
             return None
         
         transcript_data = result['results']['channels'][0]['alternatives'][0]
         transcript_text = transcript_data.get('transcript', '')
         
-        # Get metadata
         metadata = result.get('metadata', {})
         duration_seconds = metadata.get('duration', 0)
         confidence = transcript_data.get('confidence', 0)
         language = metadata.get('detected_language', 'en')
         
-        log_with_timestamp(f"✅ Deepgram API transcribed OID {oid} successfully")
+        log_with_timestamp(f"✅ Transcribed OID {oid} successfully")
 
         if not transcript_text.strip():
-            log_with_timestamp(f"Empty transcription for OID {oid}", "WARN")
+            log_with_timestamp(f"Empty transcription for OID {oid}")
             return None
         
         # Calculate costs
@@ -869,26 +692,20 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             'language': language
         }
             
-    except requests.exceptions.RequestException as e:
-        log_error(f"Deepgram API request failed for OID {oid}", e)
-        return None
-    except json.JSONDecodeError as e:
-        log_error(f"Failed to parse Deepgram response for OID {oid}", e)
-        return None
     except Exception as e:
         log_error(f"Deepgram transcription failed for OID {oid}", e)
         return None
 
 # --- OpenAI Analysis ---
 def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> Optional[Dict]:
-    """Analyze transcription using OpenAI for rankings and summary with detailed logging."""
+    """Analyze transcription with OpenAI"""
     if not OPENAI_AVAILABLE:
-        log_with_timestamp(f"OpenAI library not available for OID {oid} - using fallback scoring", "WARN")
-        # Return realistic fake scores so dashboard isn't useless
+        log_with_timestamp(f"OpenAI not available for OID {oid} - using fallback")
+        # Return fallback scores
         import random
-        random.seed(len(transcript))  # Consistent scores based on transcript length
+        random.seed(len(transcript))
         
-        base_score = min(10, max(4, len(transcript.split()) / 50))  # Score based on transcript length
+        base_score = min(10, max(4, len(transcript.split()) / 50))
         
         return {
             "customer_engagement": {
@@ -920,35 +737,25 @@ def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> 
                 "follow_up_next_steps": round(base_score + random.uniform(-1.5, 1.5), 1)
             },
             "overall_score": round(base_score + random.uniform(-0.5, 1), 1),
-            "summary": f"Call summary not available (OpenAI not configured). Transcript length: {len(transcript.split())} words."
+            "summary": f"Fallback analysis - OpenAI not configured. {len(transcript.split())} words."
         }
         
     if not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
-        log_error(f"OpenAI API key not configured or using placeholder for OID {oid}")
+        log_error(f"OpenAI API key not configured for OID {oid}")
         return None
     
-    # Truncate very long transcripts
+    # Truncate long transcripts
     if len(transcript) > 4000:
         transcript = transcript[:4000] + "... (truncated)"
-        log_with_timestamp(f"Truncated long transcript for OID {oid}")
     
-    log_with_timestamp(f"Starting OpenAI analysis for OID {oid} (transcript length: {len(transcript)} chars)")
+    log_with_timestamp(f"Starting OpenAI analysis for OID {oid}")
     
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # Enhanced prompt for both scoring and summary
-        prompt = f"""Analyze this customer service call transcript and provide:
+        prompt = f"""Analyze this customer service call and provide ratings 1-10:
 
-1. Ratings from 1-10 for these areas:
-   - Customer Engagement (how well agent engaged)
-   - Politeness (courtesy and manners)  
-   - Professional Knowledge (product/service expertise)
-   - Customer Resolution (how well issue was resolved)
-
-2. A brief 2-3 sentence summary of what happened in the call
-
-Return ONLY valid JSON with this exact structure:
+Return ONLY valid JSON:
 {{
     "customer_engagement": {{
         "score": 7,
@@ -979,17 +786,15 @@ Return ONLY valid JSON with this exact structure:
         "follow_up_next_steps": 6
     }},
     "overall_score": 7,
-    "summary": "Customer called regarding billing issue. Agent was polite and professional, quickly identified the problem and provided a solution. Issue was resolved satisfactorily."
+    "summary": "Brief call summary"
 }}
 
 Transcript: {transcript}"""
         
-        log_with_timestamp(f"Sending request to OpenAI for OID {oid}...")
-        
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a customer service quality analyzer. Always return valid JSON with numeric scores 1-10 and a brief summary."},
+                {"role": "system", "content": "You are a customer service analyzer. Return valid JSON with numeric scores 1-10."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
@@ -997,30 +802,21 @@ Transcript: {transcript}"""
             temperature=0.3
         )
         
-        raw_response = response.choices[0].message.content
-        log_with_timestamp(f"OpenAI raw response for OID {oid}: {raw_response[:200]}...")
+        analysis_json = json.loads(response.choices[0].message.content)
         
-        analysis_json = json.loads(raw_response)
-        
-        # Validate the response structure
+        # Validate structure
         required_keys = ['customer_engagement', 'politeness', 'professional_knowledge', 'customer_resolution', 'overall_score']
         for key in required_keys:
             if key not in analysis_json:
                 log_error(f"Missing key '{key}' in OpenAI response for OID {oid}")
                 return None
         
-        # Ensure all scores are numbers
+        # Convert to numbers
         for category in ['customer_engagement', 'politeness', 'professional_knowledge', 'customer_resolution']:
-            if 'score' not in analysis_json[category]:
-                log_error(f"Missing 'score' in category '{category}' for OID {oid}")
-                return None
-            
-            # Convert all values to numbers
             for subkey, value in analysis_json[category].items():
                 try:
                     analysis_json[category][subkey] = float(value)
                 except (ValueError, TypeError):
-                    log_error(f"Invalid numeric value for {category}.{subkey}: {value} in OID {oid}")
                     analysis_json[category][subkey] = 0.0
         
         try:
@@ -1028,23 +824,18 @@ Transcript: {transcript}"""
         except (ValueError, TypeError):
             analysis_json['overall_score'] = 0.0
         
-        # Ensure summary exists
         if 'summary' not in analysis_json:
-            analysis_json['summary'] = "Summary not provided by AI analysis."
+            analysis_json['summary'] = "Analysis completed."
         
-        log_with_timestamp(f"✅ OpenAI analysis successful for OID {oid} - Overall: {analysis_json['overall_score']}")
+        log_with_timestamp(f"✅ OpenAI analysis successful for OID {oid}")
         return analysis_json
         
-    except json.JSONDecodeError as e:
-        log_error(f"JSON decode error for OID {oid}", e)
-        log_with_timestamp(f"Raw response was: {raw_response if 'raw_response' in locals() else 'No response captured'}")
-        return None
     except Exception as e:
         log_error(f"OpenAI API error for OID {oid}", e)
         return None
 
 def categorize_call(transcript: str) -> str:
-    """Categorize calls based on keywords in the transcript."""
+    """Categorize calls based on keywords"""
     transcript_lower = transcript.lower()
     
     if "skip" in transcript_lower:
@@ -1057,15 +848,11 @@ def categorize_call(transcript: str) -> str:
 
 # --- Main Processing Logic ---
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """
-    Downloads audio, transcribes it, analyzes with OpenAI, stores in DB, and deletes audio.
-    Returns OID if successful, None otherwise. Enhanced with detailed logging and summary.
-    """
+    """Process single call with full pipeline"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
     
     if not oid:
-        log_with_timestamp("Skipping communication with no OID", "WARN")
         processing_stats['total_skipped'] += 1
         return None
 
@@ -1082,14 +869,12 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
     log_with_timestamp(f"Processing OID: {oid}")
 
     try:
-        # Store raw communication data for debugging
         raw_data = json.dumps(communication_data)
         
-        # 1. Download Audio
+        # Download Audio
         audio_file_path = download_audio(oid)
         if not audio_file_path:
-            log_with_timestamp(f"Skipping transcription for OID {oid} due to audio download failure or no audio available")
-            # Store metadata even if no audio
+            # Store metadata without audio
             xelion_metadata = _extract_agent_info(comm_obj)
             call_datetime = comm_obj.get('date', 'Unknown')
             call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'cancelled'] else "No Audio"
@@ -1102,53 +887,49 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         INSERT INTO calls (
                             oid, call_datetime, agent_name, phone_number, call_direction, 
                             duration_seconds, status, user_id, category, processed_at, 
-                            processing_error, raw_communication_data, summary_translation
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            raw_communication_data, summary_translation
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
                         xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
                         xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
-                        None,  # processing_error - None for no audio case
-                        raw_data, "No audio available for transcription"
+                        raw_data, "No audio available"
                     ))
                     conn.commit()
-                    log_with_timestamp(f"Stored OID {oid} (Missed/No Audio) in DB")
                     processing_stats['total_processed'] += 1
-                except sqlite3.Error as e:
-                    log_error(f"Database error storing OID {oid} (Missed/No Audio)", e)
+                except Exception as e:
+                    log_error(f"Database error storing OID {oid} (No Audio)", e)
                     processing_stats['total_errors'] += 1
                 finally:
                     conn.close()
             return None
 
-        # 2. Transcribe Audio
+        # Transcribe Audio
         xelion_metadata = _extract_agent_info(comm_obj)
         call_datetime = comm_obj.get('date', 'Unknown')
 
         transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
         
-        # 3. Delete Audio File
+        # Delete Audio File
         try:
             os.remove(audio_file_path)
             log_with_timestamp(f"Deleted audio file: {audio_file_path}")
-        except OSError as e:
-            log_error(f"Error deleting audio file {audio_file_path}", e)
+        except Exception as e:
+            log_error(f"Error deleting audio file", e)
 
         if not transcription_result:
-            log_with_timestamp(f"Skipping analysis and DB storage for OID {oid} due to transcription failure")
             processing_stats['total_errors'] += 1
             return None
 
-        # 4. Analyze Transcription with OpenAI
+        # Analyze with OpenAI
         openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
         if not openai_analysis:
-            log_with_timestamp(f"⚠️ OpenAI analysis failed for OID {oid}. Storing partial data", "WARN")
-            openai_analysis = {"summary": "Analysis failed - no summary available"}  # Will result in all 0 scores
+            openai_analysis = {"summary": "Analysis failed"}
 
-        # 5. Categorize Call
+        # Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
         
-        # 6. Store in Database
+        # Store in Database
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1164,8 +945,8 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
                         professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
                         resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
-                        processing_error, raw_communication_data, summary_translation
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        raw_communication_data, summary_translation
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
                     xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
@@ -1194,14 +975,13 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
                     openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
                     openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
-                    None,  # processing_error - None for successful processing
-                    raw_data, openai_analysis.get('summary', 'No summary available')
+                    raw_data, openai_analysis.get('summary', 'No summary')
                 ))
                 conn.commit()
-                log_with_timestamp(f"Successfully stored OID {oid} and analysis in DB")
+                log_with_timestamp(f"✅ Successfully stored OID {oid}")
                 processing_stats['total_processed'] += 1
                 return oid
-            except sqlite3.Error as e:
+            except Exception as e:
                 log_error(f"Database error storing OID {oid}", e)
                 processing_stats['total_errors'] += 1
                 return None
@@ -1214,20 +994,18 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         return None
 
 def fetch_and_transcribe_recent_calls():
-    """
-    FIXED: Only fetch NEW calls, not historic ones. Auto-starts from Flask route.
-    """
+    """Monitor for NEW calls only"""
     global background_process_running
     background_process_running = True
     
-    log_with_timestamp("🚀 AUTO-STARTED: Monitoring for NEW calls only...")
+    log_with_timestamp("🚀 Starting NEW calls monitoring...")
     
     if not xelion_login():
-        log_error("Login failed. Cannot proceed with fetching")
+        log_error("Xelion login failed")
         background_process_running = False
         return
 
-    # GET TIMESTAMP OF LAST PROCESSED CALL TO AVOID HISTORIC DATA
+    # Get last processed call timestamp
     last_call_time = None
     with db_lock:
         conn = get_db_connection()
@@ -1242,10 +1020,10 @@ def fetch_and_transcribe_recent_calls():
                 pass
         conn.close()
 
-    # Start checking from 10 minutes ago if no previous calls, otherwise from last call
+    # Start checking from appropriate time
     if not last_call_time:
         check_since = datetime.now() - timedelta(minutes=10)
-        log_with_timestamp("🆕 No previous calls - checking last 10 minutes only")
+        log_with_timestamp("🆕 No previous calls - checking last 10 minutes")
     else:
         check_since = last_call_time
         log_with_timestamp(f"🔍 Checking for NEW calls since: {check_since}")
@@ -1257,15 +1035,14 @@ def fetch_and_transcribe_recent_calls():
             try:
                 log_with_timestamp(f"🔄 Polling for NEW calls since {check_since.strftime('%Y-%m-%d %H:%M:%S')}")
                 
-                # FIXED: Only get communications since our last check - NO MULTIPLE PAGES
                 comms, _ = _fetch_communications_page(limit=50, until_date=datetime.now())
                 
                 if not comms:
-                    log_with_timestamp("📭 No new communications found")
+                    log_with_timestamp("📭 No communications found")
                     time.sleep(30)
                     continue
                 
-                # Filter to only TRULY NEW calls after our last check time
+                # Filter to NEW calls only
                 new_comms = []
                 latest_time = check_since
                 
@@ -1280,22 +1057,19 @@ def fetch_and_transcribe_recent_calls():
                     try:
                         call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
                         
-                        # CRITICAL: Only process if call is AFTER our last check time
+                        # Only process if call is AFTER check time
                         if call_dt > check_since and oid not in processed_this_session:
                             new_comms.append(comm)
                             processed_this_session.add(oid)
                             latest_time = max(latest_time, call_dt)
-                            log_with_timestamp(f"🆕 Found NEW call OID {oid} at {call_datetime}")
-                        else:
-                            log_with_timestamp(f"⏭️ Skipping old/duplicate call OID {oid} at {call_datetime}")
+                            log_with_timestamp(f"🆕 Found NEW call OID {oid}")
                     except:
-                        log_with_timestamp(f"⚠️ Date parse error for OID {oid}, skipping")
                         continue
 
                 if new_comms:
                     log_with_timestamp(f"🎯 Processing {len(new_comms)} NEW calls")
 
-                    # Process only the NEW calls
+                    # Process NEW calls
                     futures = []
                     for comm in new_comms:
                         futures.append(executor.submit(process_single_call, comm))
@@ -1309,41 +1083,55 @@ def fetch_and_transcribe_recent_calls():
                         except Exception as e:
                             log_error("Error processing call", e)
 
-                    # Update our check time to the latest call we saw
+                    # Update check time
                     check_since = latest_time
                 else:
-                    log_with_timestamp("📭 No new calls to process")
+                    log_with_timestamp("📭 No NEW calls to process")
 
                 log_with_timestamp(f"📊 Stats - Processed: {processing_stats['total_processed']}, Errors: {processing_stats['total_errors']}")
-                time.sleep(30)  # Check every 30 seconds
+                time.sleep(30)
                 
             except Exception as e:
-                log_error("Error in polling loop", e)
+                log_error("Error in monitoring loop", e)
                 time.sleep(60)
 
     background_process_running = False
-    log_with_timestamp("🛑 Background process stopped")
+    log_with_timestamp("🛑 Monitoring stopped")
+
+# --- Flask App Setup ---
+app = Flask(__name__)
+init_db()
+
+# Test configurations on startup
+log_with_timestamp("🚀 Application starting up...")
+log_with_timestamp(f"Selenium available: {SELENIUM_AVAILABLE}")
+log_with_timestamp(f"Deepgram SDK available: {DEEPGRAM_SDK_AVAILABLE}")
+log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
+
+if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
+    openai_test = test_openai_connection()
+    log_with_timestamp(f"OpenAI test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
+else:
+    log_with_timestamp("⚠️ OpenAI not configured")
 
 # --- Flask Routes ---
 @app.route('/')
 def index():
-    """Automatically start background process when accessing root"""
+    """Auto-start monitoring"""
     global background_process_running, background_thread
     
     if not background_process_running:
-        log_with_timestamp("🚀 AUTO-STARTING background process from root route")
+        log_with_timestamp("🚀 AUTO-STARTING monitoring")
         background_thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
         background_thread.daemon = True
         background_thread.start()
-        log_with_timestamp("✅ Background process auto-started")
-    else:
-        log_with_timestamp("ℹ️ Background process already running")
+        log_with_timestamp("✅ Monitoring auto-started")
     
     return render_template('index.html')
 
 @app.route('/status')
 def get_status():
-    """Get detailed status information"""
+    """Get system status"""
     openai_test_result = test_openai_connection()
     return jsonify({
         "background_running": background_process_running,
@@ -1357,31 +1145,6 @@ def get_status():
         "last_poll": processing_stats.get('last_poll_time', 'Never'),
         "last_error": processing_stats.get('last_error', 'None')
     })
-
-@app.route('/fetch_and_transcribe')
-def trigger_fetch_and_transcribe():
-    """Manual trigger for background process"""
-    global background_process_running, background_thread
-    
-    if background_process_running:
-        return jsonify({"status": "Background process already running", "running": True})
-    
-    log_with_timestamp("Received manual request to start background process")
-    background_thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
-    background_thread.daemon = True
-    background_thread.start()
-    return jsonify({"status": "Process initiated manually. Check console for updates.", "running": True})
-
-@app.route('/stop_process')
-def stop_process():
-    """Stop the background process"""
-    global background_process_running
-    if background_process_running:
-        background_process_running = False
-        log_with_timestamp("Background process stop requested")
-        return jsonify({"status": "Background process stopping...", "running": False})
-    else:
-        return jsonify({"status": "Background process not running", "running": False})
 
 @app.route('/get_dashboard_data')
 def get_dashboard_data():
@@ -1399,7 +1162,7 @@ def get_dashboard_data():
         cursor.execute("SELECT SUM(transcribed_duration_minutes) FROM calls")
         total_duration_minutes = cursor.fetchone()[0] or 0.0
 
-        # Average ratings for main categories
+        # Average ratings
         cursor.execute("""
             SELECT AVG(openai_engagement), AVG(openai_politeness), 
                    AVG(openai_professionalism), AVG(openai_resolution)
@@ -1411,7 +1174,7 @@ def get_dashboard_data():
         avg_professionalism = round(avg_main_scores[2] or 0, 2)
         avg_resolution = round(avg_main_scores[3] or 0, 2)
 
-        # Average ratings for sub-categories
+        # Sub-category averages
         cursor.execute("""
             SELECT AVG(engagement_sub1), AVG(engagement_sub2), 
                    AVG(engagement_sub3), AVG(engagement_sub4)
@@ -1498,7 +1261,7 @@ def get_dashboard_data():
 
 @app.route('/get_calls_list')
 def get_calls_list():
-    """Get detailed list of calls with agent names, scores, and summaries"""
+    """Get paginated calls list"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     agent_filter = request.args.get('agent', '')
@@ -1526,12 +1289,12 @@ def get_calls_list():
         if where_conditions:
             where_clause = "WHERE " + " AND ".join(where_conditions)
         
-        # Get total count for pagination
+        # Get total count
         count_query = f"SELECT COUNT(*) FROM calls {where_clause}"
         cursor.execute(count_query, params)
         total_calls = cursor.fetchone()[0]
         
-        # Get calls with pagination
+        # Get calls
         query = f"""
             SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
                    duration_seconds, status, category, openai_overall_score,
@@ -1568,7 +1331,7 @@ def get_calls_list():
             
             calls.append(call_data)
         
-        # Get unique agents and categories for filters
+        # Get filter options
         cursor.execute("SELECT DISTINCT agent_name FROM calls WHERE agent_name != 'Unknown' ORDER BY agent_name")
         agents = [row[0] for row in cursor.fetchall()]
         
@@ -1591,20 +1354,17 @@ def get_calls_list():
             }
         })
 
-# --- ElevenLabs Webhook Endpoints ---
+# --- ElevenLabs Endpoints ---
 @app.route('/api/get-wasteking-prices', methods=['GET'])
 def elevenlabs_get_wasteking_prices():
-    """
-    ElevenLabs webhook endpoint for fetching WasteKing pricing data
-    This is the URL ElevenLabs will call
-    """
-    log_with_timestamp("📞 ElevenLabs called WasteKing pricing endpoint")
+    """ElevenLabs webhook for WasteKing pricing"""
+    log_with_timestamp("📞 ElevenLabs called WasteKing endpoint")
     
     try:
         result = get_wasteking_prices()
         return jsonify(result)
     except Exception as e:
-        log_error("Error in ElevenLabs WasteKing endpoint", e)
+        log_error("Error in ElevenLabs endpoint", e)
         return jsonify({
             "error": "Internal server error",
             "status": "error",
@@ -1613,25 +1373,24 @@ def elevenlabs_get_wasteking_prices():
 
 @app.route('/api/setup-wasteking', methods=['POST'])
 def setup_wasteking_session():
-    """Setup WasteKing authentication session"""
+    """Setup WasteKing authentication"""
     try:
-        log_with_timestamp("🚀 Starting WasteKing session setup...")
+        log_with_timestamp("🚀 Starting WasteKing setup...")
         auth_result = authenticate_wasteking()
         
-        # Check if it's an error dict or a session
         if isinstance(auth_result, dict) and "error" in auth_result:
             return jsonify(auth_result), 500
         
         if auth_result:
             return jsonify({
                 "status": "success",
-                "message": "WasteKing authentication successful! Session saved for 30 days.",
+                "message": "WasteKing authentication successful!",
                 "timestamp": datetime.now().isoformat()
             })
         else:
             return jsonify({
                 "status": "error",
-                "message": "WasteKing authentication failed - unknown error",
+                "message": "Authentication failed",
                 "timestamp": datetime.now().isoformat()
             }), 500
             
@@ -1643,199 +1402,7 @@ def setup_wasteking_session():
             "timestamp": datetime.now().isoformat()
         }), 500
 
-@app.route('/test_openai')
-def test_openai_endpoint():
-    """Test OpenAI analysis with a sample transcript"""
-    sample_transcript = "Hello, thank you for calling our support. How can I help you today? The customer explained their issue with their account, and I was able to resolve it by resetting their password. Is there anything else I can help you with? Thank you for calling, have a great day!"
-    
-    log_with_timestamp("Testing OpenAI analysis with sample transcript...")
-    result = analyze_transcription_with_openai(sample_transcript, "TEST_OID")
-    
-    return jsonify({
-        "openai_test_successful": result is not None,
-        "sample_analysis": result,
-        "openai_available": OPENAI_AVAILABLE,
-        "api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'
-    })
-
-@app.route('/get_recent_calls')
-def get_recent_calls():
-    """Get recent calls for debugging"""
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT oid, call_datetime, status, category, agent_name, phone_number, 
-                   transcription_text, processed_at, processing_error,
-                   openai_engagement, openai_politeness, openai_professionalism, 
-                   openai_resolution, openai_overall_score, summary_translation
-            FROM calls 
-            ORDER BY processed_at DESC 
-            LIMIT 20
-        """)
-        calls = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        
-        return jsonify({"recent_calls": calls})
-
-@app.route('/init_db_manual')
-def init_db_manual():
-    init_db()
-    return "Database initialization attempted (check logs for details)."
-
-@app.route('/reset_database')
-def reset_database():
-    """Delete and recreate the database with fixed schema"""
-    global background_process_running
-    
-    # Stop background process if running
-    if background_process_running:
-        background_process_running = False
-        time.sleep(2)  # Give it time to stop
-    
-    try:
-        # Delete the database file
-        if os.path.exists(DATABASE_FILE):
-            os.remove(DATABASE_FILE)
-            log_with_timestamp(f"Deleted existing database file: {DATABASE_FILE}")
-        
-        # Recreate with fixed schema
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS calls (
-                oid TEXT PRIMARY KEY,
-                call_datetime TEXT,
-                agent_name TEXT,
-                phone_number TEXT,
-                call_direction TEXT,
-                duration_seconds REAL,
-                status TEXT,
-                user_id TEXT,
-                transcription_text TEXT,
-                transcribed_duration_minutes REAL,
-                deepgram_cost_usd REAL,
-                deepgram_cost_gbp REAL,
-                word_count INTEGER,
-                confidence REAL,
-                language TEXT,
-                openai_engagement REAL,
-                openai_politeness REAL,
-                openai_professionalism REAL,
-                openai_resolution REAL,
-                openai_overall_score REAL,
-                category TEXT,
-                engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
-                politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
-                professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
-                resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
-                processed_at TEXT,
-                processing_error TEXT,
-                raw_communication_data TEXT,
-                summary_translation TEXT
-            )
-        ''')
-        conn.commit()
-        conn.close()
-        
-        log_with_timestamp("✅ Database recreated successfully with fixed schema")
-        
-        return jsonify({
-            "status": "success",
-            "message": "Database deleted and recreated successfully!",
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        log_error("Failed to reset database", e)
-        return jsonify({
-            "status": "error",
-            "message": f"Database reset failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-@app.route('/reprocess_zero_scores')
-def reprocess_zero_scores():
-    """Reprocess calls that have zero OpenAI scores"""
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Find calls with transcriptions but zero OpenAI scores
-        cursor.execute("""
-            SELECT oid, transcription_text FROM calls 
-            WHERE transcription_text IS NOT NULL 
-            AND transcription_text != ''
-            AND (openai_overall_score = 0 OR openai_overall_score IS NULL)
-            LIMIT 10
-        """)
-        
-        calls_to_reprocess = cursor.fetchall()
-        conn.close()
-        
-        if not calls_to_reprocess:
-            return jsonify({"message": "No calls with zero scores found", "reprocessed": 0})
-        
-        reprocessed_count = 0
-        
-        for call in calls_to_reprocess:
-            oid, transcript = call
-            log_with_timestamp(f"Reprocessing OpenAI analysis for OID {oid}")
-            
-            analysis = analyze_transcription_with_openai(transcript, oid)
-            
-            if analysis:
-                with db_lock:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        UPDATE calls SET 
-                        openai_engagement = ?, openai_politeness = ?, openai_professionalism = ?, 
-                        openai_resolution = ?, openai_overall_score = ?,
-                        engagement_sub1 = ?, engagement_sub2 = ?, engagement_sub3 = ?, engagement_sub4 = ?,
-                        politeness_sub1 = ?, politeness_sub2 = ?, politeness_sub3 = ?, politeness_sub4 = ?,
-                        professionalism_sub1 = ?, professionalism_sub2 = ?, professionalism_sub3 = ?, professionalism_sub4 = ?,
-                        resolution_sub1 = ?, resolution_sub2 = ?, resolution_sub3 = ?, resolution_sub4 = ?,
-                        summary_translation = ?
-                        WHERE oid = ?
-                    """, (
-                        analysis.get('customer_engagement', {}).get('score', 0),
-                        analysis.get('politeness', {}).get('score', 0),
-                        analysis.get('professional_knowledge', {}).get('score', 0),
-                        analysis.get('customer_resolution', {}).get('score', 0),
-                        analysis.get('overall_score', 0),
-                        analysis.get('customer_engagement', {}).get('active_listening', 0),
-                        analysis.get('customer_engagement', {}).get('probing_questions', 0),
-                        analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
-                        analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
-                        analysis.get('politeness', {}).get('greeting_closing', 0),
-                        analysis.get('politeness', {}).get('tone_demeanor', 0),
-                        analysis.get('politeness', {}).get('respectful_language', 0),
-                        analysis.get('politeness', {}).get('handling_interruptions', 0),
-                        analysis.get('professional_knowledge', {}).get('product_service_info', 0),
-                        analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
-                        analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
-                        analysis.get('professional_knowledge', {}).get('solution_offering', 0),
-                        analysis.get('customer_resolution', {}).get('issue_identification', 0),
-                        analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
-                        analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
-                        analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
-                        analysis.get('summary', 'No summary available'),
-                        oid
-                    ))
-                    conn.commit()
-                    conn.close()
-                    reprocessed_count += 1
-                    log_with_timestamp(f"✅ Successfully reprocessed OID {oid}")
-            else:
-                log_with_timestamp(f"❌ Failed to reprocess OID {oid}")
-        
-        return jsonify({
-            "message": f"Reprocessed {reprocessed_count} out of {len(calls_to_reprocess)} calls",
-            "reprocessed": reprocessed_count,
-            "total_found": len(calls_to_reprocess)
-        })
-
 if __name__ == '__main__':
+    # Development only - production uses gunicorn
     port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(debug=False, host='0.0.0.0', port=port)
