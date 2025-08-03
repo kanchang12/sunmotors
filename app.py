@@ -13,13 +13,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 import re
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+
+# Try to import Selenium (might not be available in all environments)
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
 
 # Attempt Deepgram SDK import
 try:
@@ -185,6 +191,7 @@ init_db()
 
 # Test configurations on startup
 log_with_timestamp("🚀 Application starting up...")
+log_with_timestamp(f"Selenium available: {SELENIUM_AVAILABLE}")
 log_with_timestamp(f"Deepgram SDK available: {DEEPGRAM_SDK_AVAILABLE}")
 log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
 log_with_timestamp(f"OpenAI API key configured: {OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'}")
@@ -247,24 +254,94 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate and save 30-day WasteKing session"""
+    """Authenticate and save 30-day WasteKing session - Fixed for Koyeb"""
     
     log_with_timestamp("🔐 Starting WasteKing authentication...")
     
-    # Setup headless Chrome
+    if not SELENIUM_AVAILABLE:
+        log_with_timestamp("❌ Selenium not available - cannot authenticate WasteKing automatically")
+        return {
+            "error": "Selenium not available in this environment",
+            "status": "selenium_unavailable",
+            "message": "WasteKing authentication requires Selenium/Chrome which is not installed. Manual session setup required.",
+            "timestamp": datetime.now().isoformat(),
+            "help": "Contact system administrator to install Chrome/ChromeDriver or manually provide session cookies"
+        }
+    
+    # Setup headless Chrome for containerized environments
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-plugins")
+    chrome_options.add_argument("--disable-images")
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--no-zygote")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    
+    # Detect common container environments
+    is_container = any([
+        os.environ.get('PORT'),  # Koyeb, Heroku
+        os.environ.get('DYNO'),  # Heroku
+        os.environ.get('KOYEB_PUBLIC_DOMAIN'),  # Koyeb
+        os.path.exists('/.dockerenv'),  # Docker
+    ])
+    
+    if is_container:
+        log_with_timestamp("🐳 Container environment detected, adjusting Chrome options...")
+        # Try common Chrome binary locations in containers
+        possible_chrome_paths = [
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable', 
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/app/.chrome-for-testing/chrome-linux64/chrome',  # Koyeb buildpack
+            '/app/.chromedriver/bin/chromedriver'
+        ]
+        
+        chrome_binary = None
+        for path in possible_chrome_paths:
+            if os.path.exists(path):
+                chrome_binary = path
+                log_with_timestamp(f"✅ Found Chrome binary at: {path}")
+                break
+        
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
     
     try:
-        service = Service(ChromeDriverManager().install())
+        # Try to create Chrome driver
+        try:
+            if is_container:
+                # For containers, try to use system chromedriver first
+                service = Service("/usr/bin/chromedriver")
+            else:
+                # For local development
+                service = Service(ChromeDriverManager().install())
+        except:
+            # Fallback to ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        
     except Exception as e:
         log_error("Failed to setup Chrome for WasteKing auth", e)
-        return None
+        
+        # Return error response instead of None
+        return {
+            "error": "Chrome/ChromeDriver setup failed",
+            "status": "chrome_unavailable", 
+            "message": f"Cannot initialize Chrome WebDriver: {str(e)}",
+            "timestamp": datetime.now().isoformat(),
+            "help": "Chrome or ChromeDriver may not be installed in this environment. Contact administrator."
+        }
     
     try:
         log_with_timestamp("🌐 Navigating to WasteKing...")
@@ -340,9 +417,17 @@ def authenticate_wasteking():
             
     except Exception as e:
         log_error("WasteKing authentication failed", e)
-        return None
+        return {
+            "error": "WasteKing authentication process failed",
+            "status": "auth_failed",
+            "message": f"Authentication failed during login process: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except:
+            pass
 
 def extract_wasteking_pricing_data(response_text):
     """Extract pricing data from WasteKing HTML response"""
@@ -415,7 +500,7 @@ def extract_wasteking_pricing_data(response_text):
     return pricing_data
 
 def get_wasteking_prices():
-    """Get WasteKing pricing data for ElevenLabs"""
+    """Get WasteKing pricing data for ElevenLabs - Fixed for Koyeb"""
     try:
         log_with_timestamp("💰 Fetching WasteKing prices...")
         
@@ -425,14 +510,22 @@ def get_wasteking_prices():
         if not session:
             # Try to auto-authenticate if no session
             log_with_timestamp("No valid WasteKing session, attempting auto-authentication...")
-            session = authenticate_wasteking()
+            auth_result = authenticate_wasteking()
+            
+            # Check if authenticate_wasteking returned an error dict instead of a session
+            if isinstance(auth_result, dict) and "error" in auth_result:
+                log_with_timestamp(f"❌ Authentication failed: {auth_result['message']}")
+                return auth_result
+            
+            session = auth_result
             
             if not session:
                 return {
                     "error": "WasteKing authentication required",
-                    "status": "session_expired",
-                    "message": "Unable to authenticate with WasteKing system",
-                    "timestamp": datetime.now().isoformat()
+                    "status": "session_expired", 
+                    "message": "Unable to authenticate with WasteKing system. Chrome/Selenium may not be available in this environment.",
+                    "timestamp": datetime.now().isoformat(),
+                    "help": "Try visiting /api/setup-wasteking to manually authenticate, or contact administrator to install Chrome/ChromeDriver"
                 }
         
         # Fetch pricing data
@@ -460,7 +553,13 @@ def get_wasteking_prices():
         elif response.status_code in [401, 403]:
             # Session expired, try to re-authenticate
             log_with_timestamp("WasteKing session expired, re-authenticating...")
-            session = authenticate_wasteking()
+            auth_result = authenticate_wasteking()
+            
+            # Check for error dict
+            if isinstance(auth_result, dict) and "error" in auth_result:
+                return auth_result
+            
+            session = auth_result
             
             if session:
                 # Retry with new session
@@ -477,6 +576,7 @@ def get_wasteking_prices():
             return {
                 "error": "WasteKing authentication failed",
                 "status": "auth_required",
+                "message": "Session expired and re-authentication failed. Chrome/Selenium may not be available.",
                 "timestamp": datetime.now().isoformat()
             }
             
@@ -1246,6 +1346,7 @@ def get_status():
     return jsonify({
         "background_running": background_process_running,
         "processing_stats": processing_stats,
+        "selenium_available": SELENIUM_AVAILABLE,
         "deepgram_available": DEEPGRAM_SDK_AVAILABLE,
         "openai_available": OPENAI_AVAILABLE,
         "openai_connection_test": openai_test_result,
@@ -1513,9 +1614,13 @@ def setup_wasteking_session():
     """Setup WasteKing authentication session"""
     try:
         log_with_timestamp("🚀 Starting WasteKing session setup...")
-        session = authenticate_wasteking()
+        auth_result = authenticate_wasteking()
         
-        if session:
+        # Check if it's an error dict or a session
+        if isinstance(auth_result, dict) and "error" in auth_result:
+            return jsonify(auth_result), 500
+        
+        if auth_result:
             return jsonify({
                 "status": "success",
                 "message": "WasteKing authentication successful! Session saved for 30 days.",
@@ -1524,7 +1629,7 @@ def setup_wasteking_session():
         else:
             return jsonify({
                 "status": "error",
-                "message": "WasteKing authentication failed",
+                "message": "WasteKing authentication failed - unknown error",
                 "timestamp": datetime.now().isoformat()
             }), 500
             
