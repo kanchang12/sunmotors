@@ -1560,6 +1560,7 @@ def get_calls_list():
         conn.close()
         return jsonify({"calls": calls})
 
+# --- ElevenLabs Webhook Endpoints ---
 @app.route('/api/get-wasteking-prices', methods=['GET'])
 def elevenlabs_wasteking_webhook():
     """ElevenLabs webhook endpoint for fetching WasteKing pricing data"""
