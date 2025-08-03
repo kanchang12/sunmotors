@@ -202,14 +202,406 @@ if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_ke
 else:
     log_with_timestamp("⚠️ OpenAI not properly configured - analysis will fail!")
 
+# --- WasteKing Session Management ---
+def save_wasteking_session(session):
+    """Save authenticated WasteKing session for 30 days"""
+    try:
+        session_data = {
+            'cookies': session.cookies.get_dict(),
+            'timestamp': datetime.now(),
+            'headers': dict(session.headers)
+        }
+        
+        with open(WASTEKING_COOKIES_FILE, 'wb') as f:
+            pickle.dump(session_data, f)
+        
+        log_with_timestamp("✅ WasteKing session saved for 30 days")
+        return True
+    except Exception as e:
+        log_error("Failed to save WasteKing session", e)
+        return False
+
+def load_wasteking_session():
+    """Load saved WasteKing session if still valid"""
+    try:
+        if not os.path.exists(WASTEKING_COOKIES_FILE):
+            log_with_timestamp("No saved WasteKing session found")
+            return None
+        
+        with open(WASTEKING_COOKIES_FILE, 'rb') as f:
+            session_data = pickle.load(f)
+        
+        # Check if session expired (30 days)
+        age = datetime.now() - session_data['timestamp']
+        if age > timedelta(days=SESSION_TIMEOUT_DAYS):
+            log_with_timestamp(f"WasteKing session expired ({age.days} days old)")
+            return None
+        
+        # Create session with saved cookies
+        session = requests.Session()
+        session.cookies.update(session_data['cookies'])
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json, text/html, */*',
+            'Accept-Language': 'en-US,en;q=0.9'
+        })
+        
+        log_with_timestamp(f"✅ WasteKing session loaded ({age.days} days old)")
+        return session
+        
+    except Exception as e:
+        log_error("Failed to load WasteKing session", e)
+        return None
+
+def authenticate_wasteking():
+    """Authenticate and save 30-day WasteKing session - Fixed for Koyeb"""
+    
+    log_with_timestamp("🔐 Starting WasteKing authentication...")
+    
+    if not SELENIUM_AVAILABLE:
+        log_with_timestamp("❌ Selenium not available - cannot authenticate WasteKing automatically")
+        return {
+            "error": "Selenium not available in this environment",
+            "status": "selenium_unavailable",
+            "message": "WasteKing authentication requires Selenium/Chrome which is not installed. Manual session setup required.",
+            "timestamp": datetime.now().isoformat(),
+            "help": "Contact system administrator to install Chrome/ChromeDriver or manually provide session cookies"
+        }
+    
+    # Setup headless Chrome for containerized environments
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-plugins")
+    chrome_options.add_argument("--disable-images")
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--no-zygote")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    chrome_options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    
+    # Detect common container environments
+    is_container = any([
+        os.environ.get('PORT'),  # Koyeb, Heroku
+        os.environ.get('DYNO'),  # Heroku
+        os.environ.get('KOYEB_PUBLIC_DOMAIN'),  # Koyeb
+        os.path.exists('/.dockerenv'),  # Docker
+    ])
+    
+    if is_container:
+        log_with_timestamp("🐳 Container environment detected, adjusting Chrome options...")
+        # Try common Chrome binary locations in containers
+        possible_chrome_paths = [
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable', 
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/app/.chrome-for-testing/chrome-linux64/chrome',  # Koyeb buildpack
+            '/app/.chromedriver/bin/chromedriver'
+        ]
+        
+        chrome_binary = None
+        for path in possible_chrome_paths:
+            if os.path.exists(path):
+                chrome_binary = path
+                log_with_timestamp(f"✅ Found Chrome binary at: {path}")
+                break
+        
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+    
+    try:
+        # Try to create Chrome driver
+        try:
+            if is_container:
+                # For containers, try to use system chromedriver first
+                service = Service("/usr/bin/chromedriver")
+            else:
+                # For local development
+                service = Service(ChromeDriverManager().install())
+        except:
+            # Fallback to ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+    except Exception as e:
+        log_error("Failed to setup Chrome for WasteKing auth", e)
+        
+        # Return error response instead of None
+        return {
+            "error": "Chrome/ChromeDriver setup failed",
+            "status": "chrome_unavailable", 
+            "message": f"Cannot initialize Chrome WebDriver: {str(e)}",
+            "timestamp": datetime.now().isoformat(),
+            "help": "Chrome or ChromeDriver may not be installed in this environment. Contact administrator."
+        }
+    
+    try:
+        log_with_timestamp("🌐 Navigating to WasteKing...")
+        driver.get(WASTEKING_PRICING_URL)
+        
+        # Wait for MS365 redirect
+        WebDriverWait(driver, 15).until(
+            lambda d: "login.microsoftonline.com" in d.current_url
+        )
+        log_with_timestamp("🔄 Redirected to MS365 login")
+        
+        # Enter email
+        email_field = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.NAME, "loginfmt"))
+        )
+        email_field.clear()
+        email_field.send_keys(WASTEKING_EMAIL)
+        
+        # Click Next
+        time.sleep(1)
+        next_btn = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "idSIButton9"))
+        )
+        next_btn.click()
+        
+        # Enter password
+        time.sleep(3)
+        password_field = WebDriverWait(driver, 15).until(
+            EC.element_to_be_clickable((By.NAME, "passwd"))
+        )
+        password_field.clear()
+        password_field.send_keys(WASTEKING_PASSWORD)
+        
+        # Click Sign In
+        time.sleep(1)
+        signin_btn = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.ID, "idSIButton9"))
+        )
+        signin_btn.click()
+        
+        # Handle "Stay signed in" - CRITICAL for 30-day session
+        try:
+            log_with_timestamp("✋ Handling 'Stay signed in' prompt...")
+            stay_btn = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.ID, "idSIButton9"))
+            )
+            stay_btn.click()  # Click YES to stay signed in for 30 days
+            log_with_timestamp("✅ Clicked 'Stay signed in'")
+        except:
+            log_with_timestamp("No 'Stay signed in' prompt")
+        
+        # Wait for successful redirect
+        WebDriverWait(driver, 30).until(
+            lambda d: "wasteking-suppliermarketplace-dev" in d.current_url
+        )
+        log_with_timestamp("✅ Successfully authenticated WasteKing!")
+        
+        # Extract cookies
+        session = requests.Session()
+        cookies = driver.get_cookies()
+        for cookie in cookies:
+            session.cookies.set(cookie['name'], cookie['value'])
+        
+        # Test the session
+        test_response = session.get(WASTEKING_PRICING_URL)
+        if test_response.status_code == 200:
+            save_wasteking_session(session)
+            log_with_timestamp(f"🎉 WasteKing authentication complete! Session valid for 30 days.")
+            return session
+        else:
+            log_with_timestamp("❌ WasteKing session test failed")
+            return None
+            
+    except Exception as e:
+        log_error("WasteKing authentication failed", e)
+        return {
+            "error": "WasteKing authentication process failed",
+            "status": "auth_failed",
+            "message": f"Authentication failed during login process: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }
+    finally:
+        try:
+            driver.quit()
+        except:
+            pass
+
+def extract_wasteking_pricing_data(response_text):
+    """Extract pricing data from WasteKing HTML response"""
+    
+    soup = BeautifulSoup(response_text, 'html.parser')
+    pricing_data = {}
+    
+    # Extract tables with pricing data
+    tables = soup.find_all('table')
+    table_data = []
+    
+    for i, table in enumerate(tables):
+        try:
+            rows = table.find_all('tr')
+            table_rows = []
+            
+            for row in rows:
+                cells = row.find_all(['td', 'th'])
+                if cells:
+                    row_data = [cell.get_text(strip=True) for cell in cells]
+                    if any(row_data):  # Skip empty rows
+                        table_rows.append(row_data)
+            
+            if table_rows:
+                table_data.append({
+                    'table_id': i,
+                    'headers': table_rows[0] if table_rows else [],
+                    'rows': table_rows[1:] if len(table_rows) > 1 else [],
+                    'total_rows': len(table_rows)
+                })
+                
+        except Exception as e:
+            log_error(f"Error processing WasteKing table {i}", e)
+            continue
+    
+    if table_data:
+        pricing_data['tables'] = table_data
+    
+    # Look for JSON data in scripts
+    scripts = soup.find_all('script')
+    script_data = []
+    
+    for script in scripts:
+        if script.string and ('price' in script.string.lower() or 'cost' in script.string.lower() or 'data' in script.string.lower()):
+            # Try to extract JSON
+            json_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', script.string)
+            for match in json_matches:
+                try:
+                    data = json.loads(match)
+                    if isinstance(data, dict) and len(str(data)) > 50:
+                        script_data.append(data)
+                except:
+                    continue
+    
+    if script_data:
+        pricing_data['script_data'] = script_data
+    
+    # Look for price mentions in text
+    price_elements = soup.find_all(text=re.compile(r'£\d+|cost|price|\$\d+', re.I))
+    price_mentions = []
+    
+    for element in price_elements[:20]:  # Limit to 20
+        text = element.strip()
+        if text and len(text) < 200:  # Skip very long texts
+            price_mentions.append(text)
+    
+    if price_mentions:
+        pricing_data['price_mentions'] = price_mentions
+    
+    return pricing_data
+
+def get_wasteking_prices():
+    """Get WasteKing pricing data for ElevenLabs - Fixed for Koyeb"""
+    try:
+        log_with_timestamp("💰 Fetching WasteKing prices...")
+        
+        # Load saved session
+        session = load_wasteking_session()
+        
+        if not session:
+            # Try to auto-authenticate if no session
+            log_with_timestamp("No valid WasteKing session, attempting auto-authentication...")
+            auth_result = authenticate_wasteking()
+            
+            # Check if authenticate_wasteking returned an error dict instead of a session
+            if isinstance(auth_result, dict) and "error" in auth_result:
+                log_with_timestamp(f"❌ Authentication failed: {auth_result['message']}")
+                return auth_result
+            
+            session = auth_result
+            
+            if not session:
+                return {
+                    "error": "WasteKing authentication required",
+                    "status": "session_expired", 
+                    "message": "Unable to authenticate with WasteKing system. Chrome/Selenium may not be available in this environment.",
+                    "timestamp": datetime.now().isoformat(),
+                    "help": "Try visiting /api/setup-wasteking to manually authenticate, or contact administrator to install Chrome/ChromeDriver"
+                }
+        
+        # Fetch pricing data
+        response = session.get(WASTEKING_PRICING_URL, timeout=15)
+        
+        if response.status_code == 200:
+            # Extract pricing data
+            pricing_data = extract_wasteking_pricing_data(response.text)
+            
+            if pricing_data:
+                return {
+                    "status": "success",
+                    "timestamp": datetime.now().isoformat(),
+                    "data_types": list(pricing_data.keys()),
+                    "data": pricing_data,
+                    "summary": f"Found {len(pricing_data)} data sections from WasteKing supplier marketplace"
+                }
+            else:
+                return {
+                    "status": "no_data",
+                    "message": "WasteKing page loaded but no pricing data found",
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+        elif response.status_code in [401, 403]:
+            # Session expired, try to re-authenticate
+            log_with_timestamp("WasteKing session expired, re-authenticating...")
+            auth_result = authenticate_wasteking()
+            
+            # Check for error dict
+            if isinstance(auth_result, dict) and "error" in auth_result:
+                return auth_result
+            
+            session = auth_result
+            
+            if session:
+                # Retry with new session
+                response = session.get(WASTEKING_PRICING_URL, timeout=15)
+                if response.status_code == 200:
+                    pricing_data = extract_wasteking_pricing_data(response.text)
+                    return {
+                        "status": "success",
+                        "message": "Re-authenticated and fetched WasteKing data",
+                        "timestamp": datetime.now().isoformat(),
+                        "data": pricing_data
+                    }
+            
+            return {
+                "error": "WasteKing authentication failed",
+                "status": "auth_required",
+                "message": "Session expired and re-authentication failed. Chrome/Selenium may not be available.",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        else:
+            return {
+                "error": f"WasteKing request failed with status {response.status_code}",
+                "status": "request_failed",
+                "timestamp": datetime.now().isoformat()
+            }
+            
+    except Exception as e:
+        log_error("Error fetching WasteKing prices", e)
+        return {
+            "error": str(e),
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }
+
 # --- Xelion API Functions ---
 def xelion_login() -> bool:
     global session_token
     with login_lock:
-        if session_token:
-            log_with_timestamp("Xelion token already exists. Reusing")
-            return True
-
+        # ALWAYS try fresh login if called explicitly
+        session_token = None
+        
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
         
@@ -220,16 +612,26 @@ def xelion_login() -> bool:
             "appKey": XELION_APP_KEY
         }
         
-        log_with_timestamp(f"Attempting Xelion login for {XELION_USERNAME} with userSpace: {XELION_USERSPACE}")
+        log_with_timestamp(f"🔑 Attempting Xelion login for {XELION_USERNAME} with userSpace: {XELION_USERSPACE}")
         try:
+            # Clear any old headers
+            if 'Authorization' in xelion_session.headers:
+                del xelion_session.headers['Authorization']
+                
             response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload))
             response.raise_for_status() 
             
             login_response = response.json()
             session_token = login_response.get("authentication")
-            xelion_session.headers.update({"Authorization": f"xelion {session_token}"})
-            log_with_timestamp(f"Successfully logged in to Xelion (Valid until: {login_response.get('validUntil', 'N/A')})")
-            return True
+            
+            if session_token:
+                xelion_session.headers.update({"Authorization": f"xelion {session_token}"})
+                log_with_timestamp(f"✅ Successfully logged in to Xelion (Valid until: {login_response.get('validUntil', 'N/A')})")
+                return True
+            else:
+                log_error("No authentication token received in login response")
+                return False
+                
         except requests.exceptions.RequestException as e:
             log_error(f"Failed to log in to Xelion", e)
             if hasattr(e, 'response') and e.response is not None:
@@ -282,24 +684,31 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
             log_with_timestamp(f"HTTP Status Code: {e.response.status_code}", "ERROR")
             log_with_timestamp(f"Response Body: {e.response.text}", "ERROR")
         
-        # If token expires, try to re-login
-        if "401 Unauthorized" in str(e) and xelion_login():
-            log_with_timestamp("Attempting re-login and re-fetch...")
-            try:
-                response = xelion_session.get(communications_url, params=params, timeout=30) 
-                response.raise_for_status()
-                data = response.json()
-                communications = data.get('data', [])
-                next_before_oid = None
-                if 'meta' in data and 'paging' in data['meta']:
-                    next_before_oid = data['meta']['paging'].get('previousId')
-                log_with_timestamp(f"Successfully re-fetched {len(communications)} communications after re-login")
-                return communications, next_before_oid
-            except requests.exceptions.RequestException as re:
-                log_error("Re-fetch after re-login failed", re)
+        # FIXED: Check for 401 status code properly
+        if hasattr(e, 'response') and e.response is not None and e.response.status_code == 401:
+            log_with_timestamp("🔑 401 Authentication error detected, attempting re-login...")
+            global session_token
+            session_token = None  # Force new login
+            
+            if xelion_login():
+                log_with_timestamp("✅ Re-login successful, retrying fetch...")
+                try:
+                    response = xelion_session.get(communications_url, params=params, timeout=30) 
+                    response.raise_for_status()
+                    data = response.json()
+                    communications = data.get('data', [])
+                    next_before_oid = None
+                    if 'meta' in data and 'paging' in data['meta']:
+                        next_before_oid = data['meta']['paging'].get('previousId')
+                    log_with_timestamp(f"✅ Successfully re-fetched {len(communications)} communications after re-login")
+                    return communications, next_before_oid
+                except requests.exceptions.RequestException as re:
+                    log_error("Re-fetch after re-login failed", re)
+                    return [], None
+            else:
+                log_error("Re-login failed after 401 error")
                 return [], None
         return [], None
-
 def _extract_agent_info(comm_obj: Dict) -> Dict:
     """Extract agent info from Xelion communication object with detailed logging."""
     agent_info = {
@@ -963,9 +1372,35 @@ def get_status():
         "openai_available": OPENAI_AVAILABLE,
         "openai_connection_test": openai_test_result,
         "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
+        "wasteking_session_valid": load_wasteking_session() is not None,
         "last_poll": processing_stats.get('last_poll_time', 'Never'),
         "last_error": processing_stats.get('last_error', 'None')
     })
+
+@app.route('/fetch_and_transcribe')
+def trigger_fetch_and_transcribe():
+    """Manual trigger for background process"""
+    global background_process_running, background_thread
+    
+    if background_process_running:
+        return jsonify({"status": "Background process already running", "running": True})
+    
+    log_with_timestamp("Received manual request to start background process")
+    background_thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
+    background_thread.daemon = True
+    background_thread.start()
+    return jsonify({"status": "Process initiated manually. Check console for updates.", "running": True})
+
+@app.route('/stop_process')
+def stop_process():
+    """Stop the background process"""
+    global background_process_running
+    if background_process_running:
+        background_process_running = False
+        log_with_timestamp("Background process stop requested")
+        return jsonify({"status": "Background process stopping...", "running": False})
+    else:
+        return jsonify({"status": "Background process not running", "running": False})
 
 @app.route('/get_dashboard_data')
 def get_dashboard_data():
@@ -1173,6 +1608,251 @@ def get_calls_list():
                 "agents": agents,
                 "categories": categories
             }
+        })
+
+# --- ElevenLabs Webhook Endpoints ---
+@app.route('/api/get-wasteking-prices', methods=['GET'])
+def elevenlabs_get_wasteking_prices():
+    """
+    ElevenLabs webhook endpoint for fetching WasteKing pricing data
+    This is the URL ElevenLabs will call
+    """
+    log_with_timestamp("📞 ElevenLabs called WasteKing pricing endpoint")
+    
+    try:
+        result = get_wasteking_prices()
+        return jsonify(result)
+    except Exception as e:
+        log_error("Error in ElevenLabs WasteKing endpoint", e)
+        return jsonify({
+            "error": "Internal server error",
+            "status": "error",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/setup-wasteking', methods=['POST'])
+def setup_wasteking_session():
+    """Setup WasteKing authentication session"""
+    try:
+        log_with_timestamp("🚀 Starting WasteKing session setup...")
+        auth_result = authenticate_wasteking()
+        
+        # Check if it's an error dict or a session
+        if isinstance(auth_result, dict) and "error" in auth_result:
+            return jsonify(auth_result), 500
+        
+        if auth_result:
+            return jsonify({
+                "status": "success",
+                "message": "WasteKing authentication successful! Session saved for 30 days.",
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "WasteKing authentication failed - unknown error",
+                "timestamp": datetime.now().isoformat()
+            }), 500
+            
+    except Exception as e:
+        log_error("WasteKing setup error", e)
+        return jsonify({
+            "status": "error",
+            "message": f"Setup failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/test_openai')
+def test_openai_endpoint():
+    """Test OpenAI analysis with a sample transcript"""
+    sample_transcript = "Hello, thank you for calling our support. How can I help you today? The customer explained their issue with their account, and I was able to resolve it by resetting their password. Is there anything else I can help you with? Thank you for calling, have a great day!"
+    
+    log_with_timestamp("Testing OpenAI analysis with sample transcript...")
+    result = analyze_transcription_with_openai(sample_transcript, "TEST_OID")
+    
+    return jsonify({
+        "openai_test_successful": result is not None,
+        "sample_analysis": result,
+        "openai_available": OPENAI_AVAILABLE,
+        "api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key'
+    })
+
+@app.route('/get_recent_calls')
+def get_recent_calls():
+    """Get recent calls for debugging"""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT oid, call_datetime, status, category, agent_name, phone_number, 
+                   transcription_text, processed_at, processing_error,
+                   openai_engagement, openai_politeness, openai_professionalism, 
+                   openai_resolution, openai_overall_score, summary_translation
+            FROM calls 
+            ORDER BY processed_at DESC 
+            LIMIT 20
+        """)
+        calls = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        
+        return jsonify({"recent_calls": calls})
+
+@app.route('/init_db_manual')
+def init_db_manual():
+    init_db()
+    return "Database initialization attempted (check logs for details)."
+
+@app.route('/reset_database')
+def reset_database():
+    """Delete and recreate the database with fixed schema"""
+    global background_process_running
+    
+    # Stop background process if running
+    if background_process_running:
+        background_process_running = False
+        time.sleep(2)  # Give it time to stop
+    
+    try:
+        # Delete the database file
+        if os.path.exists(DATABASE_FILE):
+            os.remove(DATABASE_FILE)
+            log_with_timestamp(f"Deleted existing database file: {DATABASE_FILE}")
+        
+        # Recreate with fixed schema
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS calls (
+                oid TEXT PRIMARY KEY,
+                call_datetime TEXT,
+                agent_name TEXT,
+                phone_number TEXT,
+                call_direction TEXT,
+                duration_seconds REAL,
+                status TEXT,
+                user_id TEXT,
+                transcription_text TEXT,
+                transcribed_duration_minutes REAL,
+                deepgram_cost_usd REAL,
+                deepgram_cost_gbp REAL,
+                word_count INTEGER,
+                confidence REAL,
+                language TEXT,
+                openai_engagement REAL,
+                openai_politeness REAL,
+                openai_professionalism REAL,
+                openai_resolution REAL,
+                openai_overall_score REAL,
+                category TEXT,
+                engagement_sub1 REAL, engagement_sub2 REAL, engagement_sub3 REAL, engagement_sub4 REAL,
+                politeness_sub1 REAL, politeness_sub2 REAL, politeness_sub3 REAL, politeness_sub4 REAL,
+                professionalism_sub1 REAL, professionalism_sub2 REAL, professionalism_sub3 REAL, professionalism_sub4 REAL,
+                resolution_sub1 REAL, resolution_sub2 REAL, resolution_sub3 REAL, resolution_sub4 REAL,
+                processed_at TEXT,
+                processing_error TEXT,
+                raw_communication_data TEXT,
+                summary_translation TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        
+        log_with_timestamp("✅ Database recreated successfully with fixed schema")
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database deleted and recreated successfully!",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        log_error("Failed to reset database", e)
+        return jsonify({
+            "status": "error",
+            "message": f"Database reset failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/reprocess_zero_scores')
+def reprocess_zero_scores():
+    """Reprocess calls that have zero OpenAI scores"""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Find calls with transcriptions but zero OpenAI scores
+        cursor.execute("""
+            SELECT oid, transcription_text FROM calls 
+            WHERE transcription_text IS NOT NULL 
+            AND transcription_text != ''
+            AND (openai_overall_score = 0 OR openai_overall_score IS NULL)
+            LIMIT 10
+        """)
+        
+        calls_to_reprocess = cursor.fetchall()
+        conn.close()
+        
+        if not calls_to_reprocess:
+            return jsonify({"message": "No calls with zero scores found", "reprocessed": 0})
+        
+        reprocessed_count = 0
+        
+        for call in calls_to_reprocess:
+            oid, transcript = call
+            log_with_timestamp(f"Reprocessing OpenAI analysis for OID {oid}")
+            
+            analysis = analyze_transcription_with_openai(transcript, oid)
+            
+            if analysis:
+                with db_lock:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        UPDATE calls SET 
+                        openai_engagement = ?, openai_politeness = ?, openai_professionalism = ?, 
+                        openai_resolution = ?, openai_overall_score = ?,
+                        engagement_sub1 = ?, engagement_sub2 = ?, engagement_sub3 = ?, engagement_sub4 = ?,
+                        politeness_sub1 = ?, politeness_sub2 = ?, politeness_sub3 = ?, politeness_sub4 = ?,
+                        professionalism_sub1 = ?, professionalism_sub2 = ?, professionalism_sub3 = ?, professionalism_sub4 = ?,
+                        resolution_sub1 = ?, resolution_sub2 = ?, resolution_sub3 = ?, resolution_sub4 = ?,
+                        summary_translation = ?
+                        WHERE oid = ?
+                    """, (
+                        analysis.get('customer_engagement', {}).get('score', 0),
+                        analysis.get('politeness', {}).get('score', 0),
+                        analysis.get('professional_knowledge', {}).get('score', 0),
+                        analysis.get('customer_resolution', {}).get('score', 0),
+                        analysis.get('overall_score', 0),
+                        analysis.get('customer_engagement', {}).get('active_listening', 0),
+                        analysis.get('customer_engagement', {}).get('probing_questions', 0),
+                        analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
+                        analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
+                        analysis.get('politeness', {}).get('greeting_closing', 0),
+                        analysis.get('politeness', {}).get('tone_demeanor', 0),
+                        analysis.get('politeness', {}).get('respectful_language', 0),
+                        analysis.get('politeness', {}).get('handling_interruptions', 0),
+                        analysis.get('professional_knowledge', {}).get('product_service_info', 0),
+                        analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
+                        analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
+                        analysis.get('professional_knowledge', {}).get('solution_offering', 0),
+                        analysis.get('customer_resolution', {}).get('issue_identification', 0),
+                        analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
+                        analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
+                        analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                        analysis.get('summary', 'No summary available'),
+                        oid
+                    ))
+                    conn.commit()
+                    conn.close()
+                    reprocessed_count += 1
+                    log_with_timestamp(f"✅ Successfully reprocessed OID {oid}")
+            else:
+                log_with_timestamp(f"❌ Failed to reprocess OID {oid}")
+        
+        return jsonify({
+            "message": f"Reprocessed {reprocessed_count} out of {len(calls_to_reprocess)} calls",
+            "reprocessed": reprocessed_count,
+            "total_found": len(calls_to_reprocess)
         })
 
 if __name__ == '__main__':
