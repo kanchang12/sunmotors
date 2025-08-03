@@ -14,12 +14,17 @@ from typing import Dict, List, Optional, Tuple
 import re
 from bs4 import BeautifulSoup
 
-# Try to import Playwright
+# Use Selenium with proper Chrome setup
 try:
-    from playwright.sync_api import sync_playwright
-    PLAYWRIGHT_AVAILABLE = True
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    SELENIUM_AVAILABLE = True
 except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
+    SELENIUM_AVAILABLE = False
 
 # OpenAI import
 try:
@@ -221,102 +226,207 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate WasteKing using Playwright"""
-    log_with_timestamp("🔐 Starting WasteKing authentication with Playwright...")
+    """Authenticate WasteKing with Selenium Chrome"""
+    log_with_timestamp("🔐 Starting WasteKing authentication with Selenium...")
     
-    if not PLAYWRIGHT_AVAILABLE:
+    if not SELENIUM_AVAILABLE:
         return {
-            "error": "Playwright not available",
-            "status": "playwright_unavailable",
-            "message": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
+            "error": "Selenium not available",
+            "status": "selenium_unavailable",
+            "message": "Selenium not installed",
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    # Enhanced Chrome options for containers
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--single-process")
+    chrome_options.add_argument("--no-zygote")
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
+    
+    # Detect container environment
+    is_container = any([
+        os.environ.get('PORT'),
+        os.environ.get('DYNO'),
+        os.environ.get('KOYEB_PUBLIC_DOMAIN'),
+        os.path.exists('/.dockerenv'),
+    ])
+    
+    if is_container:
+        log_with_timestamp("🐳 Container environment detected")
+        
+        # Try multiple Chrome binary locations
+        chrome_paths = [
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/opt/google/chrome/chrome'
+        ]
+        
+        chrome_binary = None
+        for path in chrome_paths:
+            if os.path.exists(path):
+                chrome_binary = path
+                log_with_timestamp(f"✅ Found Chrome at: {path}")
+                break
+        
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+        else:
+            log_error("Chrome binary not found in any expected location")
+            return {
+                "error": "Chrome not installed",
+                "status": "chrome_not_found",
+                "message": "Chrome browser not found in container. Please install Chrome in your container.",
+                "timestamp": datetime.now().isoformat(),
+                "searched_paths": chrome_paths
+            }
+    
+    try:
+        # Setup ChromeDriver service
+        service = None
+        chromedriver_paths = [
+            '/usr/local/bin/chromedriver',
+            '/usr/bin/chromedriver',
+            '/opt/chromedriver/chromedriver'
+        ]
+        
+        chromedriver_path = None
+        for path in chromedriver_paths:
+            if os.path.exists(path):
+                chromedriver_path = path
+                break
+        
+        if chromedriver_path:
+            service = Service(chromedriver_path)
+            log_with_timestamp(f"✅ Using ChromeDriver at: {chromedriver_path}")
+        else:
+            # Try webdriver_manager as fallback
+            try:
+                from webdriver_manager.chrome import ChromeDriverManager
+                service = Service(ChromeDriverManager().install())
+                log_with_timestamp("📦 Using ChromeDriverManager for driver setup")
+            except ImportError:
+                log_error("webdriver_manager not available and no chromedriver found")
+                return {
+                    "error": "ChromeDriver not found",
+                    "status": "chromedriver_not_found",
+                    "message": "ChromeDriver not found and webdriver_manager not available",
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(30)
+        
+    except Exception as e:
+        log_error("Failed to setup Chrome", e)
+        return {
+            "error": "Chrome setup failed",
+            "status": "chrome_unavailable", 
+            "message": f"Chrome initialization failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }
     
     try:
-        with sync_playwright() as p:
-            # Launch browser with container-optimized settings
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--single-process',
-                    '--no-zygote'
-                ]
+        log_with_timestamp("🌐 Navigating to WasteKing...")
+        driver.get(WASTEKING_PRICING_URL)
+        
+        # Wait for page load
+        WebDriverWait(driver, 10).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+        
+        # Check if already logged in
+        current_url = driver.current_url
+        if 'reporting' in current_url.lower():
+            log_with_timestamp("✅ Already logged in!")
+            
+            # Extract cookies
+            cookies = driver.get_cookies()
+            session = create_session_from_selenium_cookies(cookies)
+            driver.quit()
+            
+            save_wasteking_session(session)
+            return session
+        
+        # Look for login form
+        try:
+            email_field = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 
+                    "input[name='email'], input[type='email'], input[id*='email'], #email"))
             )
-            
-            context = browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            log_with_timestamp("🔍 Login form detected")
+        except:
+            driver.quit()
+            return {
+                "error": "Login form not found",
+                "status": "no_login_form",
+                "message": f"Could not find login form. Current URL: {driver.current_url}",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        # Fill email
+        log_with_timestamp("📝 Filling email...")
+        email_field.clear()
+        email_field.send_keys(WASTEKING_EMAIL)
+        
+        # Fill password
+        try:
+            password_field = driver.find_element(By.CSS_SELECTOR, 
+                "input[name='password'], input[type='password'], input[id*='password'], #password")
+            password_field.clear()
+            password_field.send_keys(WASTEKING_PASSWORD)
+            log_with_timestamp("📝 Password filled")
+        except Exception as e:
+            driver.quit()
+            return {
+                "error": "Could not fill password field",
+                "status": "password_field_error",
+                "message": f"Password field error: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        # Submit form
+        log_with_timestamp("🚀 Submitting login form...")
+        try:
+            submit_button = driver.find_element(By.CSS_SELECTOR, 
+                "button[type='submit'], input[type='submit'], .btn-login, button:contains('Login'), button:contains('Sign in')")
+            submit_button.click()
+        except:
+            # Try pressing Enter as fallback
+            password_field.send_keys(Keys.RETURN)
+        
+        # Wait for navigation
+        try:
+            WebDriverWait(driver, 15).until(
+                lambda d: 'reporting' in d.current_url.lower() or 
+                         'dashboard' in d.current_url.lower() or
+                         d.current_url != WASTEKING_PRICING_URL
             )
-            
-            page = context.new_page()
-            page.set_default_timeout(30000)
-            
-            log_with_timestamp("🌐 Navigating to WasteKing...")
-            page.goto(WASTEKING_PRICING_URL)
-            
-            # Wait for login form or redirect
-            try:
-                page.wait_for_selector('input[name="email"], input[type="email"]', timeout=10000)
-                log_with_timestamp("🔍 Login form detected")
-            except:
-                log_with_timestamp("⚠️ No login form found - might already be logged in")
-                browser.close()
-                return {
-                    "error": "Login form not found",
-                    "status": "no_login_form",
-                    "message": "Could not find login form on the page",
-                    "timestamp": datetime.now().isoformat()
-                }
-            
-            # Fill login form
-            log_with_timestamp("📝 Filling login credentials...")
-            page.fill('input[name="email"], input[type="email"]', WASTEKING_EMAIL)
-            page.fill('input[name="password"], input[type="password"]', WASTEKING_PASSWORD)
-            
-            # Submit form
-            log_with_timestamp("🚀 Submitting login form...")
-            page.click('button[type="submit"], input[type="submit"]')
-            
-            # Wait for redirect or success
-            try:
-                page.wait_for_url('**/reporting/**', timeout=15000)
-                log_with_timestamp("✅ Login successful - redirected to reporting")
-            except:
-                log_with_timestamp("⚠️ Login might have failed - checking current URL")
-                current_url = page.url
-                if 'login' in current_url.lower():
-                    browser.close()
-                    return {
-                        "error": "Login failed",
-                        "status": "login_failed",
-                        "message": "Still on login page after form submission",
-                        "timestamp": datetime.now().isoformat()
-                    }
+            log_with_timestamp("✅ Navigation detected")
+        except:
+            pass
+        
+        # Check final URL
+        final_url = driver.current_url
+        if 'reporting' in final_url.lower() or 'dashboard' in final_url.lower():
+            log_with_timestamp("✅ Login successful!")
             
             # Extract cookies and create session
-            cookies = context.cookies()
-            session = requests.Session()
-            
-            for cookie in cookies:
-                session.cookies.set(
-                    cookie['name'], 
-                    cookie['value'], 
-                    domain=cookie.get('domain', ''),
-                    path=cookie.get('path', '/')
-                )
-            
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/json, text/html, */*',
-                'Accept-Language': 'en-US,en;q=0.9'
-            })
-            
-            browser.close()
+            cookies = driver.get_cookies()
+            session = create_session_from_selenium_cookies(cookies)
+            driver.quit()
             
             # Test session
             test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
@@ -331,15 +441,47 @@ def authenticate_wasteking():
                     "message": f"Test request failed with status {test_response.status_code}",
                     "timestamp": datetime.now().isoformat()
                 }
-            
+        else:
+            driver.quit()
+            return {
+                "error": "Login failed",
+                "status": "login_failed",
+                "message": f"Login unsuccessful. Final URL: {final_url}",
+                "timestamp": datetime.now().isoformat()
+            }
+        
     except Exception as e:
         log_error("WasteKing authentication failed", e)
+        try:
+            driver.quit()
+        except:
+            pass
         return {
             "error": "Authentication failed",
             "status": "auth_error",
             "message": f"Login process failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }
+
+def create_session_from_selenium_cookies(cookies):
+    """Create requests session from Selenium cookies"""
+    session = requests.Session()
+    
+    for cookie in cookies:
+        session.cookies.set(
+            cookie['name'], 
+            cookie['value'], 
+            domain=cookie.get('domain', ''),
+            path=cookie.get('path', '/')
+        )
+    
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json, text/html, */*',
+        'Accept-Language': 'en-US,en;q=0.9'
+    })
+    
+    return session
 
 def get_wasteking_prices():
     """Get WasteKing pricing data"""
@@ -413,8 +555,9 @@ def get_wasteking_prices():
             "timestamp": datetime.now().isoformat()
         }
 
-# --- Xelion API Functions ---
+# --- Xelion API Functions (Using Working Patterns) ---
 def xelion_login() -> bool:
+    """Login using the WORKING pattern from transcription.py"""
     global session_token
     with login_lock:
         session_token = None
@@ -422,32 +565,36 @@ def xelion_login() -> bool:
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
         
+        # Use the WORKING userspace pattern
+        if XELION_USERSPACE:
+            userspace = XELION_USERSPACE
+        else:
+            userspace = f"transcriber-{XELION_USERNAME.split('@')[0].replace('.', '-')}"
+        
         data_payload = { 
             "userName": XELION_USERNAME, 
             "password": XELION_PASSWORD,
-            "userSpace": XELION_USERSPACE,
+            "userSpace": userspace,
             "appKey": XELION_APP_KEY
         }
+        
+        json_data_string = json.dumps(data_payload)
         
         log_with_timestamp(f"🔑 Attempting Xelion login for {XELION_USERNAME}")
         try:
             if 'Authorization' in xelion_session.headers:
                 del xelion_session.headers['Authorization']
                 
-            response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload), timeout=30)
+            response = xelion_session.post(login_url, headers=headers, data=json_data_string, timeout=30)
+            response.raise_for_status() 
             
-            log_with_timestamp(f"Login response status: {response.status_code}")
-            
-            if response.status_code != 200:
-                log_error(f"Login failed with status {response.status_code}: {response.text}")
-                return False
-                
             login_response = response.json()
             session_token = login_response.get("authentication")
             
             if session_token:
                 xelion_session.headers.update({"Authorization": f"xelion {session_token}"})
-                log_with_timestamp(f"✅ Successfully logged in to Xelion")
+                valid_until = login_response.get('validUntil', 'N/A')
+                log_with_timestamp(f"✅ Successfully logged in (Valid until: {valid_until})")
                 return True
             else:
                 log_error("No authentication token received")
@@ -458,66 +605,67 @@ def xelion_login() -> bool:
             return False
 
 def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Optional[str] = None) -> Tuple[List[Dict], Optional[str]]:
-    """Fetch communications with error handling"""
+    """Fetch communications using the WORKING pattern from transcription.py"""
     params = {'limit': limit}
-    params['until'] = until_date.strftime('%Y-%m-%d %H:%M:%S') 
+    if until_date:
+        params['until'] = until_date.strftime('%Y-%m-%d %H:%M:%S') 
     if before_oid:
         params['before'] = before_oid
 
-    communications_url = f"{XELION_BASE_URL.rstrip('/')}/communications"
+    # Use the WORKING base URLs pattern from transcription.py
+    base_urls_to_try = [
+        XELION_BASE_URL,  
+        XELION_BASE_URL.replace('/wasteking', '/master'), 
+        'https://lvsl01.xelion.com/api/v1/master', 
+    ]
     
     for attempt in range(3):
-        try:
-            log_with_timestamp(f"Fetching communications (attempt {attempt + 1})")
-            response = xelion_session.get(communications_url, params=params, timeout=30) 
-            
-            log_with_timestamp(f"Communications response: {response.status_code}")
-            
-            if response.status_code == 401:
-                log_with_timestamp("🔑 401 error, re-authenticating...")
-                global session_token
-                session_token = None
+        for base_url in base_urls_to_try:
+            communications_url = f"{base_url.rstrip('/')}/communications"
+            try:
+                log_with_timestamp(f"Fetching from {communications_url} (attempt {attempt + 1})")
+                response = xelion_session.get(communications_url, params=params, timeout=30) 
                 
-                if xelion_login():
-                    continue
-                else:
-                    return [], None
-            
-            if response.status_code != 200:
-                log_error(f"Communications API error: {response.status_code} - {response.text}")
-                if attempt == 2:
-                    return [], None
-                time.sleep(5)
+                if response.status_code == 401:
+                    log_with_timestamp("🔑 401 error, re-authenticating...")
+                    global session_token
+                    session_token = None
+                    
+                    if xelion_login():
+                        continue
+                    else:
+                        return [], None
+                
+                response.raise_for_status()
+                data = response.json()
+                communications = data.get('data', [])
+                
+                log_with_timestamp(f"Successfully fetched {len(communications)} communications from {base_url}")
+                
+                processing_stats['total_fetched'] += len(communications)
+                processing_stats['last_poll_time'] = datetime.now().isoformat()
+                
+                # Track status breakdown
+                status_breakdown = {}
+                for comm in communications:
+                    status = comm.get('object', {}).get('status', 'unknown')
+                    status_breakdown[status] = status_breakdown.get(status, 0) + 1
+                    processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
+                
+                log_with_timestamp(f"Status breakdown: {status_breakdown}")
+                
+                next_before_oid = None
+                if 'meta' in data and 'paging' in data['meta']:
+                    next_before_oid = data['meta']['paging'].get('previousId')
+                
+                return communications, next_before_oid
+                    
+            except Exception as e:
+                log_error(f"Failed to fetch from {base_url} (attempt {attempt + 1})", e)
                 continue
-            
-            data = response.json()
-            communications = data.get('data', [])
-            
-            log_with_timestamp(f"Successfully fetched {len(communications)} communications")
-            
-            processing_stats['total_fetched'] += len(communications)
-            processing_stats['last_poll_time'] = datetime.now().isoformat()
-            
-            # Track status breakdown
-            status_breakdown = {}
-            for comm in communications:
-                status = comm.get('object', {}).get('status', 'unknown')
-                status_breakdown[status] = status_breakdown.get(status, 0) + 1
-                processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
-            
-            log_with_timestamp(f"Status breakdown: {status_breakdown}")
-            
-            next_before_oid = None
-            if 'meta' in data and 'paging' in data['meta']:
-                next_before_oid = data['meta']['paging'].get('previousId')
-            
-            return communications, next_before_oid
-                
-        except Exception as e:
-            log_error(f"Failed to fetch communications (attempt {attempt + 1})", e)
-            if attempt == 2:
-                return [], None
-            time.sleep(5)
+    
+    log_error("Failed to fetch communications from all URLs and attempts")
+    return [], None
 
 def _extract_agent_info(comm_obj: Dict) -> Dict:
     """Extract agent info from communication object"""
@@ -558,52 +706,32 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
     return agent_info
 
 def download_audio(communication_oid: str) -> Optional[str]:
-    """Download audio file with improved error handling and debugging"""
+    """Download audio using the WORKING pattern from transcription.py"""
     audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
 
     if os.path.exists(file_path):
-        log_with_timestamp(f"Audio for OID {communication_oid} already exists")
+        log_with_timestamp(f"Audio for OID {communication_oid} already exists: {file_path}")
         return file_path
     
     try:
         log_with_timestamp(f"🎵 Downloading audio for OID {communication_oid} from: {audio_url}")
         
-        # Add headers to mimic browser request
-        headers = {
-            'Accept': 'audio/mpeg,audio/*,*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-        }
-        
-        response = xelion_session.get(audio_url, headers=headers, timeout=60, stream=True)
+        response = xelion_session.get(audio_url, timeout=60)
         
         log_with_timestamp(f"Audio download response: {response.status_code}")
-        log_with_timestamp(f"Response headers: {dict(response.headers)}")
         
         if response.status_code == 200:
-            content_length = response.headers.get('content-length', 'unknown')
-            content_type = response.headers.get('content-type', 'unknown')
-            
-            log_with_timestamp(f"Content-Length: {content_length}, Content-Type: {content_type}")
-            
-            # Download in chunks
-            total_size = 0
             with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        total_size += len(chunk)
+                f.write(response.content)
+            log_with_timestamp(f"Downloaded OID {communication_oid} ({len(response.content)} bytes)")
             
-            log_with_timestamp(f"Downloaded {total_size} bytes for OID {communication_oid}")
-            
-            if total_size > 1000:  # Ensure we got actual audio
+            if len(response.content) > 1000:  # Ensure we got actual audio
                 log_with_timestamp(f"✅ Audio download successful for OID {communication_oid}")
                 return file_path
             else:
-                log_with_timestamp(f"❌ Audio file too small for OID {communication_oid} ({total_size} bytes)")
+                log_with_timestamp(f"❌ Audio file too small for OID {communication_oid} ({len(response.content)} bytes)")
                 try:
                     os.remove(file_path)
                 except:
@@ -613,11 +741,12 @@ def download_audio(communication_oid: str) -> Optional[str]:
             log_with_timestamp(f"❌ No audio found for OID {communication_oid}")
             return None
         elif response.status_code == 401:
-            log_with_timestamp(f"🔑 Audio download requires re-authentication for OID {communication_oid}")
+            log_with_timestamp(f"🔑 401: Re-authenticating for OID {communication_oid}")
+            if xelion_login():
+                return download_audio(communication_oid)  # Retry after re-auth
             return None
         else:
-            log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code}")
-            log_error(f"Response text: {response.text[:500]}")
+            log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code} - {response.text[:200]}")
             return None
             
     except Exception as e:
@@ -874,7 +1003,7 @@ def categorize_call(transcript: str) -> str:
 
 # --- Main Processing Logic ---
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call with full pipeline and enhanced debugging"""
+    """Process single call using WORKING patterns from transcription.py"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
     
@@ -889,7 +1018,6 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
         if cursor.fetchone():
             conn.close()
-            log_with_timestamp(f"⏭️ OID {oid} already processed, skipping")
             return None
         conn.close()
 
@@ -900,15 +1028,14 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         xelion_metadata = _extract_agent_info(comm_obj)
         call_datetime = comm_obj.get('date', 'Unknown')
         
-        log_with_timestamp(f"📊 Call info - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
+        log_with_timestamp(f"📊 Call - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
         
-        # Download Audio
+        # Try to download audio for any call (let the API decide what's available)
         audio_file_path = download_audio(oid)
+        
         if not audio_file_path:
-            # Store metadata without audio
-            call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'cancelled'] else "No Audio"
-            
-            log_with_timestamp(f"❌ No audio for OID {oid}, storing as {call_category}")
+            # Store metadata without audio - use the WORKING pattern
+            call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
             
             with db_lock:
                 conn = get_db_connection()
@@ -936,18 +1063,16 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     conn.close()
             return None
 
-        # Transcribe Audio
+        # Transcribe Audio using WORKING pattern
         transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
         
         # Delete Audio File
         try:
             os.remove(audio_file_path)
-            log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
         except Exception as e:
             log_error(f"Error deleting audio file", e)
 
         if not transcription_result:
-            log_with_timestamp(f"❌ Transcription failed for OID {oid}")
             processing_stats['total_errors'] += 1
             return None
 
@@ -959,7 +1084,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         # Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
         
-        # Store in Database
+        # Store in Database using WORKING pattern
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1008,7 +1133,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     raw_data, openai_analysis.get('summary', 'No summary')
                 ))
                 conn.commit()
-                log_with_timestamp(f"✅ Successfully stored OID {oid}")
+                log_with_timestamp(f"✅ Successfully stored OID {oid} with transcription")
                 processing_stats['total_processed'] += 1
                 return oid
             except Exception as e:
@@ -1134,7 +1259,7 @@ init_db()
 
 # Test configurations on startup
 log_with_timestamp("🚀 Application starting up...")
-log_with_timestamp(f"Playwright available: {PLAYWRIGHT_AVAILABLE}")
+log_with_timestamp(f"Selenium available: {SELENIUM_AVAILABLE}")
 log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
 
 if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
@@ -1165,7 +1290,7 @@ def get_status():
     return jsonify({
         "background_running": background_process_running,
         "processing_stats": processing_stats,
-        "playwright_available": PLAYWRIGHT_AVAILABLE,
+        "selenium_available": SELENIUM_AVAILABLE,
         "openai_available": OPENAI_AVAILABLE,
         "openai_connection_test": openai_test_result,
         "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
