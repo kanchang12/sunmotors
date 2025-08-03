@@ -101,18 +101,6 @@
             margin-top: 30px;
             margin-bottom: 30px;
         }
-        .btn-primary {
-            background: linear-gradient(45deg, #667eea, #764ba2);
-            border: none;
-            padding: 12px 30px;
-            font-size: 1.1rem;
-            border-radius: 8px;
-            transition: all 0.3s ease;
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-        }
         .calls-section {
             margin-top: 40px;
         }
@@ -208,26 +196,32 @@
             background-color: #e2e3e5;
             color: #383d41;
         }
-        .wasteking-section {
-            margin-top: 30px;
-            padding: 20px;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+        .auto-status {
+            background: linear-gradient(45deg, #28a745, #20c997);
+            color: white;
+            padding: 15px;
             border-radius: 12px;
-            color: white;
             text-align: center;
+            margin-bottom: 30px;
+            animation: pulse 2s infinite;
         }
-        .wasteking-btn {
-            background-color: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 2px solid white;
-            padding: 10px 20px;
-            border-radius: 8px;
-            margin: 5px;
-            transition: all 0.3s ease;
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+            100% { transform: scale(1); }
         }
-        .wasteking-btn:hover {
-            background-color: white;
-            color: #667eea;
+        .live-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: #28a745;
+            border-radius: 50%;
+            animation: blink 1s infinite;
+            margin-right: 8px;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
         }
     </style>
 </head>
@@ -238,20 +232,11 @@
             <p>Real-time insights from Xelion calls with AI-powered transcription and analysis</p>
         </div>
 
-        <div class="button-container">
-            <div class="alert alert-success">
-                <strong>✅ Auto-Monitoring Active</strong><br>
-                System is automatically monitoring calls in the background
-            </div>
-        </div>
-
-        <!-- WasteKing Integration Section -->
-        <div class="wasteking-section">
-            <h4>🏭 WasteKing Supplier Marketplace Integration</h4>
-            <p>ElevenLabs can now access live pricing data from WasteKing supplier marketplace</p>
-            <button class="btn wasteking-btn" id="setupWastekingBtn">Setup WasteKing Session</button>
-            <button class="btn wasteking-btn" id="testWastekingBtn">Test Pricing Data</button>
-            <div id="wastekingStatus" class="mt-3"></div>
+        <!-- Auto-Start Status -->
+        <div class="auto-status">
+            <span class="live-indicator"></span>
+            <strong>🚀 SYSTEM AUTO-STARTED!</strong><br>
+            Monitoring live calls automatically - Processing NEW calls only (not historic data)
         </div>
 
         <hr>
@@ -573,35 +558,6 @@
         }
 
         // --- Fetch and Update Data ---
-        async function loadCallsList() {
-            try {
-                const response = await fetch('/get_calls_list');
-                const data = await response.json();
-                
-                const tbody = document.getElementById('callsTableBody');
-                tbody.innerHTML = '';
-                
-                data.calls.forEach(call => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${call.call_datetime || 'N/A'}</td>
-                        <td>${call.agent_name || 'Unknown'}</td>
-                        <td>${call.phone_number || 'N/A'}</td>
-                        <td>${call.category || 'N/A'}</td>
-                        <td>${(call.openai_overall_score || 0).toFixed(1)}</td>
-                        <td>${(call.openai_engagement || 0).toFixed(1)}</td>
-                        <td>${(call.openai_politeness || 0).toFixed(1)}</td>
-                        <td>${(call.openai_professionalism || 0).toFixed(1)}</td>
-                        <td>${(call.openai_resolution || 0).toFixed(1)}</td>
-                        <td>${call.summary_translation || 'No summary'}</td>
-                    `;
-                    tbody.appendChild(row);
-                });
-            } catch (error) {
-                console.error('Error loading calls list:', error);
-            }
-        }
-
         async function fetchDashboardData() {
             try {
                 const response = await fetch('/get_dashboard_data');
@@ -771,64 +727,7 @@
             paginationControls.appendChild(nextLi);
         }
 
-        // --- WasteKing Functions ---
-        async function setupWasteKing() {
-            const statusDiv = document.getElementById('wastekingStatus');
-            statusDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Setting up WasteKing session...';
-            
-            try {
-                const response = await fetch('/api/setup-wasteking', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    statusDiv.innerHTML = '<div class="alert alert-success">✅ WasteKing session setup successful!</div>';
-                } else {
-                    statusDiv.innerHTML = '<div class="alert alert-danger">❌ Setup failed: ' + data.message + '</div>';
-                }
-            } catch (error) {
-                statusDiv.innerHTML = '<div class="alert alert-danger">❌ Error: ' + error.message + '</div>';
-            }
-        }
-
-        async function testWastekingPrices() {
-            const statusDiv = document.getElementById('wastekingStatus');
-            statusDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Testing pricing data...';
-            
-            try {
-                const response = await fetch('/api/get-wasteking-prices');
-                const data = await response.json();
-                
-                if (data.status === 'success') {
-                    statusDiv.innerHTML = `<div class="alert alert-success">✅ Pricing data fetched successfully! Found ${data.data_types?.length || 0} data sections.</div>`;
-                } else {
-                    statusDiv.innerHTML = '<div class="alert alert-warning">⚠️ ' + (data.message || data.error) + '</div>';
-                }
-            } catch (error) {
-                statusDiv.innerHTML = '<div class="alert alert-danger">❌ Error: ' + error.message + '</div>';
-            }
-        }
-
         // --- Event Listeners ---
-        document.getElementById('fetchCallsButton').addEventListener('click', async () => {
-            document.getElementById('fetchCallsButton').disabled = true;
-            document.getElementById('fetchCallsButton').innerText = '⏳ Monitoring Calls...';
-            try {
-                const response = await fetch('/fetch_and_transcribe');
-                const data = await response.json();
-                console.log(data.status);
-                // Start polling for updates after initiating the process
-                setInterval(fetchDashboardData, 5000); // Poll every 5 seconds
-                setInterval(fetchCallsList, 10000); // Poll calls every 10 seconds
-            } catch (error) {
-                console.error('Error initiating fetch and transcribe:', error);
-                document.getElementById('fetchCallsButton').disabled = false;
-                document.getElementById('fetchCallsButton').innerText = '🚀 Start Live Call Monitoring & Analysis';
-            }
-        });
-
-        document.getElementById('setupWastekingBtn').addEventListener('click', setupWasteKing);
-        document.getElementById('testWastekingBtn').addEventListener('click', testWastekingPrices);
-
         document.getElementById('refreshCallsBtn').addEventListener('click', () => {
             currentPage = 1;
             fetchCallsList();
@@ -874,9 +773,21 @@
             }
         });
 
-        // Initial fetch when the page loads
-        fetchDashboardData();
-        fetchCallsList();
+        // --- Auto-start functionality ---
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 Dashboard loading - System auto-started via Flask route');
+            
+            // Initial data fetch
+            fetchDashboardData();
+            fetchCallsList();
+            
+            // Auto-refresh data every 10 seconds
+            setInterval(fetchDashboardData, 10000);
+            setInterval(fetchCallsList, 15000);
+            
+            console.log('✅ Dashboard initialized - Auto-refreshing every 10-15 seconds');
+        });
     </script>
 </body>
 </html>
