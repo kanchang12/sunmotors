@@ -405,7 +405,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
                     diarize=True, utterances=True, language="en-GB"
                 )
                 log_with_timestamp(f"Transcribing OID {oid} using Deepgram SDK...")
-                with open(audio_file_path, 'rb') as audio_
+                with open(audio_file_path, 'rb') as audio_:
                     source = FileSource(audio=audio_)
                     response = deepgram_client.listen.prerecorded.v("1").transcribe_file(source, options)
                 
