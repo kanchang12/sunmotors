@@ -1,7 +1,6 @@
 Flask
 requests
 beautifulsoup4
-playwright
 openai
 gunicorn
 Werkzeug
