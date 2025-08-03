@@ -1541,6 +1541,24 @@ def setup_wasteking_session():
             "timestamp": datetime.now().isoformat()
         }), 500
 
+@app.route('/get_calls_list')
+def get_calls_list():
+    """Get detailed list of calls with agent names, scores, and summaries"""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT oid, call_datetime, agent_name, phone_number, category, 
+                   openai_overall_score, openai_engagement, openai_politeness, 
+                   openai_professionalism, openai_resolution, summary_translation,
+                   duration_seconds, status
+            FROM calls 
+            ORDER BY processed_at DESC 
+            LIMIT 100
+        """)
+        calls = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({"calls": calls})
 
 @app.route('/api/get-wasteking-prices', methods=['GET'])
 def elevenlabs_wasteking_webhook():
