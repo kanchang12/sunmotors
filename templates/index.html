@@ -223,6 +223,22 @@
             0%, 50% { opacity: 1; }
             51%, 100% { opacity: 0.3; }
         }
+        .error-alert {
+            background-color: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #f5c6cb;
+        }
+        .success-alert {
+            background-color: #d4edda;
+            color: #155724;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #c3e6cb;
+        }
     </style>
 </head>
 <body>
@@ -231,6 +247,9 @@
             <h1>📞 Call Analysis Dashboard</h1>
             <p>Real-time insights from Xelion calls with AI-powered transcription and analysis</p>
         </div>
+
+        <!-- Status Messages -->
+        <div id="alertContainer"></div>
 
         <!-- Auto-Start Status -->
         <div class="auto-status">
@@ -380,6 +399,7 @@
                         <div class="col-md-12">
                             <button class="btn btn-primary" id="refreshCallsBtn">🔄 Refresh Calls</button>
                             <button class="btn btn-secondary" id="clearFiltersBtn">Clear Filters</button>
+                            <button class="btn btn-info" id="checkStatusBtn">📊 Check Status</button>
                         </div>
                     </div>
                 </div>
@@ -437,6 +457,33 @@
             per_page: 50
         };
 
+        // --- Utility Functions ---
+        function showAlert(message, type = 'info') {
+            const alertContainer = document.getElementById('alertContainer');
+            const alertClass = type === 'error' ? 'error-alert' : 'success-alert';
+            
+            const alertDiv = document.createElement('div');
+            alertDiv.className = alertClass;
+            alertDiv.innerHTML = `
+                <strong>${type === 'error' ? '❌ Error:' : '✅ Success:'}</strong> ${message}
+                <button type="button" class="btn-close float-end" aria-label="Close" onclick="this.parentElement.remove()"></button>
+            `;
+            
+            alertContainer.appendChild(alertDiv);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentElement) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+
+        function handleFetchError(error, context = 'operation') {
+            console.error(`Error in ${context}:`, error);
+            showAlert(`Failed to ${context}. Please check the console for details.`, 'error');
+        }
+
         // --- Gauge Chart Utility ---
         function createGaugeChart(ctx, value, label) {
             return new Chart(ctx, {
@@ -456,22 +503,14 @@
                     rotation: 270,
                     circumference: 180,
                     plugins: {
-                        legend: {
-                            display: false
-                        },
-                        tooltip: {
-                            enabled: false
-                        }
+                        legend: { display: false },
+                        tooltip: { enabled: false }
                     },
                     elements: {
-                        arc: {
-                            borderWidth: 0
-                        }
+                        arc: { borderWidth: 0 }
                     },
                     layout: {
-                        padding: {
-                            bottom: 20
-                        }
+                        padding: { bottom: 20 }
                     },
                     animation: {
                         animateRotate: true,
@@ -506,47 +545,51 @@
         let skipGaugeChart, manInVanGaugeChart, generalEnquiryGaugeChart, complaintGaugeChart, missedNoAudioGaugeChart;
 
         function updateGauges(data) {
-            const categories = data.category_call_ratings;
+            try {
+                const categories = data.category_call_ratings;
 
-            // Initialize or update SKIP gauge
-            const skipCanvas = document.getElementById('skipGauge');
-            const skipScore = categories.SKIP ? categories.SKIP.average_score : 0;
-            const skipCount = categories.SKIP ? categories.SKIP.count : 0;
-            document.getElementById('skipCount').innerText = `(${skipCount} calls)`;
-            if (skipGaugeChart) skipGaugeChart.destroy();
-            skipGaugeChart = createGaugeChart(skipCanvas.getContext('2d'), skipScore, 'SKIP');
+                // Update SKIP gauge
+                const skipCanvas = document.getElementById('skipGauge');
+                const skipScore = categories.SKIP ? categories.SKIP.average_score : 0;
+                const skipCount = categories.SKIP ? categories.SKIP.count : 0;
+                document.getElementById('skipCount').innerText = `(${skipCount} calls)`;
+                if (skipGaugeChart) skipGaugeChart.destroy();
+                skipGaugeChart = createGaugeChart(skipCanvas.getContext('2d'), skipScore, 'SKIP');
 
-            // Initialize or update Man in Van gauge
-            const manInVanCanvas = document.getElementById('manInVanGauge');
-            const manInVanScore = categories['man in van'] ? categories['man in van'].average_score : 0;
-            const manInVanCount = categories['man in van'] ? categories['man in van'].count : 0;
-            document.getElementById('manInVanCount').innerText = `(${manInVanCount} calls)`;
-            if (manInVanGaugeChart) manInVanGaugeChart.destroy();
-            manInVanGaugeChart = createGaugeChart(manInVanCanvas.getContext('2d'), manInVanScore, 'Man in Van');
+                // Update Man in Van gauge
+                const manInVanCanvas = document.getElementById('manInVanGauge');
+                const manInVanScore = categories['man in van'] ? categories['man in van'].average_score : 0;
+                const manInVanCount = categories['man in van'] ? categories['man in van'].count : 0;
+                document.getElementById('manInVanCount').innerText = `(${manInVanCount} calls)`;
+                if (manInVanGaugeChart) manInVanGaugeChart.destroy();
+                manInVanGaugeChart = createGaugeChart(manInVanCanvas.getContext('2d'), manInVanScore, 'Man in Van');
 
-            // Initialize or update General Enquiry gauge
-            const generalEnquiryCanvas = document.getElementById('generalEnquiryGauge');
-            const generalEnquiryScore = categories['general enquiry'] ? categories['general enquiry'].average_score : 0;
-            const generalEnquiryCount = categories['general enquiry'] ? categories['general enquiry'].count : 0;
-            document.getElementById('generalEnquiryCount').innerText = `(${generalEnquiryCount} calls)`;
-            if (generalEnquiryGaugeChart) generalEnquiryGaugeChart.destroy();
-            generalEnquiryGaugeChart = createGaugeChart(generalEnquiryCanvas.getContext('2d'), generalEnquiryScore, 'General Enquiry');
+                // Update General Enquiry gauge
+                const generalEnquiryCanvas = document.getElementById('generalEnquiryGauge');
+                const generalEnquiryScore = categories['general enquiry'] ? categories['general enquiry'].average_score : 0;
+                const generalEnquiryCount = categories['general enquiry'] ? categories['general enquiry'].count : 0;
+                document.getElementById('generalEnquiryCount').innerText = `(${generalEnquiryCount} calls)`;
+                if (generalEnquiryGaugeChart) generalEnquiryGaugeChart.destroy();
+                generalEnquiryGaugeChart = createGaugeChart(generalEnquiryCanvas.getContext('2d'), generalEnquiryScore, 'General Enquiry');
 
-            // Initialize or update Complaint gauge
-            const complaintCanvas = document.getElementById('complaintGauge');
-            const complaintScore = categories.complaint ? categories.complaint.average_score : 0;
-            const complaintCount = categories.complaint ? categories.complaint.count : 0;
-            document.getElementById('complaintCount').innerText = `(${complaintCount} calls)`;
-            if (complaintGaugeChart) complaintGaugeChart.destroy();
-            complaintGaugeChart = createGaugeChart(complaintCanvas.getContext('2d'), complaintScore, 'Complaint');
+                // Update Complaint gauge
+                const complaintCanvas = document.getElementById('complaintGauge');
+                const complaintScore = categories.complaint ? categories.complaint.average_score : 0;
+                const complaintCount = categories.complaint ? categories.complaint.count : 0;
+                document.getElementById('complaintCount').innerText = `(${complaintCount} calls)`;
+                if (complaintGaugeChart) complaintGaugeChart.destroy();
+                complaintGaugeChart = createGaugeChart(complaintCanvas.getContext('2d'), complaintScore, 'Complaint');
 
-            // Initialize or update Missed/No Audio gauge
-            const missedNoAudioCanvas = document.getElementById('missedNoAudioGauge');
-            const missedNoAudioScore = categories['Missed/No Audio'] ? categories['Missed/No Audio'].average_score : 0;
-            const missedNoAudioCount = categories['Missed/No Audio'] ? categories['Missed/No Audio'].count : 0;
-            document.getElementById('missedNoAudioCount').innerText = `(${missedNoAudioCount} calls)`;
-            if (missedNoAudioGaugeChart) missedNoAudioGaugeChart.destroy();
-            missedNoAudioGaugeChart = createGaugeChart(missedNoAudioCanvas.getContext('2d'), missedNoAudioScore, 'Missed/No Audio');
+                // Update Missed/No Audio gauge
+                const missedNoAudioCanvas = document.getElementById('missedNoAudioGauge');
+                const missedNoAudioScore = categories['Missed/No Audio'] ? categories['Missed/No Audio'].average_score : 0;
+                const missedNoAudioCount = categories['Missed/No Audio'] ? categories['Missed/No Audio'].count : 0;
+                document.getElementById('missedNoAudioCount').innerText = `(${missedNoAudioCount} calls)`;
+                if (missedNoAudioGaugeChart) missedNoAudioGaugeChart.destroy();
+                missedNoAudioGaugeChart = createGaugeChart(missedNoAudioCanvas.getContext('2d'), missedNoAudioScore, 'Missed/No Audio');
+            } catch (error) {
+                console.error('Error updating gauges:', error);
+            }
         }
 
         // --- Score Badge Helper ---
@@ -561,6 +604,10 @@
         async function fetchDashboardData() {
             try {
                 const response = await fetch('/get_dashboard_data');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
 
                 document.getElementById('totalCalls').innerText = data.total_calls.toLocaleString();
@@ -594,7 +641,7 @@
                 updateGauges(data);
 
             } catch (error) {
-                console.error('Error fetching dashboard data:', error);
+                handleFetchError(error, 'fetch dashboard data');
             }
         }
 
@@ -611,6 +658,10 @@
                 });
 
                 const response = await fetch(`/get_calls_list?${params}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
 
                 // Update filters dropdowns
@@ -623,114 +674,150 @@
                 updatePagination(data.pagination);
 
             } catch (error) {
-                console.error('Error fetching calls list:', error);
+                handleFetchError(error, 'fetch calls list');
             } finally {
                 document.getElementById('callsLoading').style.display = 'none';
             }
         }
 
         function updateFiltersDropdowns(filters) {
-            // Update agents dropdown
-            const agentSelect = document.getElementById('agentFilter');
-            const currentAgent = agentSelect.value;
-            agentSelect.innerHTML = '<option value="">All Agents</option>';
-            filters.agents.forEach(agent => {
-                const option = document.createElement('option');
-                option.value = agent;
-                option.textContent = agent;
-                if (agent === currentAgent) option.selected = true;
-                agentSelect.appendChild(option);
-            });
+            try {
+                // Update agents dropdown
+                const agentSelect = document.getElementById('agentFilter');
+                const currentAgent = agentSelect.value;
+                agentSelect.innerHTML = '<option value="">All Agents</option>';
+                filters.agents.forEach(agent => {
+                    const option = document.createElement('option');
+                    option.value = agent;
+                    option.textContent = agent;
+                    if (agent === currentAgent) option.selected = true;
+                    agentSelect.appendChild(option);
+                });
 
-            // Update categories dropdown
-            const categorySelect = document.getElementById('categoryFilter');
-            const currentCategory = categorySelect.value;
-            categorySelect.innerHTML = '<option value="">All Categories</option>';
-            filters.categories.forEach(category => {
-                const option = document.createElement('option');
-                option.value = category;
-                option.textContent = category;
-                if (category === currentCategory) option.selected = true;
-                categorySelect.appendChild(option);
-            });
+                // Update categories dropdown
+                const categorySelect = document.getElementById('categoryFilter');
+                const currentCategory = categorySelect.value;
+                categorySelect.innerHTML = '<option value="">All Categories</option>';
+                filters.categories.forEach(category => {
+                    const option = document.createElement('option');
+                    option.value = category;
+                    option.textContent = category;
+                    if (category === currentCategory) option.selected = true;
+                    categorySelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error updating filter dropdowns:', error);
+            }
         }
 
         function updateCallsTable(calls) {
-            const tbody = document.getElementById('callsTableBody');
-            tbody.innerHTML = '';
+            try {
+                const tbody = document.getElementById('callsTableBody');
+                tbody.innerHTML = '';
 
-            if (calls.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="text-center">No calls found</td></tr>';
-                return;
-            }
-
-            calls.forEach(call => {
-                const row = document.createElement('tr');
-                
-                // Determine status badge
-                let statusBadge = '';
-                if (call.transcription_text) {
-                    statusBadge = '<span class="status-badge status-completed">Completed</span>';
-                } else if (call.status && call.status.toLowerCase().includes('missed')) {
-                    statusBadge = '<span class="status-badge status-missed">Missed</span>';
-                } else {
-                    statusBadge = '<span class="status-badge status-no-audio">No Audio</span>';
+                if (calls.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="11" class="text-center">No calls found</td></tr>';
+                    return;
                 }
-                
-                row.innerHTML = `
-                    <td>${call.formatted_datetime || call.call_datetime}</td>
-                    <td>
-                        <div class="agent-name">${call.agent_name}</div>
-                        ${statusBadge}
-                    </td>
-                    <td>${call.phone_number}</td>
-                    <td>${call.formatted_duration}</td>
-                    <td><span class="badge bg-secondary">${call.category || 'Unknown'}</span></td>
-                    <td><span class="score-badge ${getScoreBadgeClass(call.openai_overall_score || 0)}">${(call.openai_overall_score || 0).toFixed(1)}</span></td>
-                    <td><span class="score-badge ${getScoreBadgeClass(call.openai_engagement || 0)}">${(call.openai_engagement || 0).toFixed(1)}</span></td>
-                    <td><span class="score-badge ${getScoreBadgeClass(call.openai_politeness || 0)}">${(call.openai_politeness || 0).toFixed(1)}</span></td>
-                    <td><span class="score-badge ${getScoreBadgeClass(call.openai_professionalism || 0)}">${(call.openai_professionalism || 0).toFixed(1)}</span></td>
-                    <td><span class="score-badge ${getScoreBadgeClass(call.openai_resolution || 0)}">${(call.openai_resolution || 0).toFixed(1)}</span></td>
-                    <td><div class="call-summary">${call.summary_translation || 'No summary available'}</div></td>
-                `;
-                tbody.appendChild(row);
-            });
+
+                calls.forEach(call => {
+                    const row = document.createElement('tr');
+                    
+                    // Determine status badge
+                    let statusBadge = '';
+                    if (call.transcription_text) {
+                        statusBadge = '<span class="status-badge status-completed">Completed</span>';
+                    } else if (call.status && call.status.toLowerCase().includes('missed')) {
+                        statusBadge = '<span class="status-badge status-missed">Missed</span>';
+                    } else {
+                        statusBadge = '<span class="status-badge status-no-audio">No Audio</span>';
+                    }
+                    
+                    row.innerHTML = `
+                        <td>${call.formatted_datetime || call.call_datetime}</td>
+                        <td>
+                            <div class="agent-name">${call.agent_name}</div>
+                            ${statusBadge}
+                        </td>
+                        <td>${call.phone_number}</td>
+                        <td>${call.formatted_duration}</td>
+                        <td><span class="badge bg-secondary">${call.category || 'Unknown'}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_overall_score || 0)}">${(call.openai_overall_score || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_engagement || 0)}">${(call.openai_engagement || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_politeness || 0)}">${(call.openai_politeness || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_professionalism || 0)}">${(call.openai_professionalism || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_resolution || 0)}">${(call.openai_resolution || 0).toFixed(1)}</span></td>
+                        <td><div class="call-summary">${call.summary_translation || 'No summary available'}</div></td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Error updating calls table:', error);
+            }
         }
 
         function updatePagination(pagination) {
-            const paginationControls = document.getElementById('paginationControls');
-            paginationControls.innerHTML = '';
+            try {
+                const paginationControls = document.getElementById('paginationControls');
+                paginationControls.innerHTML = '';
 
-            if (pagination.pages <= 1) return;
+                if (pagination.pages <= 1) return;
 
-            // Previous button
-            const prevLi = document.createElement('li');
-            prevLi.className = `page-item ${pagination.page === 1 ? 'disabled' : ''}`;
-            prevLi.innerHTML = '<a class="page-link" href="#" data-page="' + (pagination.page - 1) + '">Previous</a>';
-            paginationControls.appendChild(prevLi);
+                // Previous button
+                const prevLi = document.createElement('li');
+                prevLi.className = `page-item ${pagination.page === 1 ? 'disabled' : ''}`;
+                prevLi.innerHTML = '<a class="page-link" href="#" data-page="' + (pagination.page - 1) + '">Previous</a>';
+                paginationControls.appendChild(prevLi);
 
-            // Page numbers
-            const startPage = Math.max(1, pagination.page - 2);
-            const endPage = Math.min(pagination.pages, pagination.page + 2);
+                // Page numbers
+                const startPage = Math.max(1, pagination.page - 2);
+                const endPage = Math.min(pagination.pages, pagination.page + 2);
 
-            for (let i = startPage; i <= endPage; i++) {
-                const li = document.createElement('li');
-                li.className = `page-item ${i === pagination.page ? 'active' : ''}`;
-                li.innerHTML = '<a class="page-link" href="#" data-page="' + i + '">' + i + '</a>';
-                paginationControls.appendChild(li);
+                for (let i = startPage; i <= endPage; i++) {
+                    const li = document.createElement('li');
+                    li.className = `page-item ${i === pagination.page ? 'active' : ''}`;
+                    li.innerHTML = '<a class="page-link" href="#" data-page="' + i + '">' + i + '</a>';
+                    paginationControls.appendChild(li);
+                }
+
+                // Next button
+                const nextLi = document.createElement('li');
+                nextLi.className = `page-item ${pagination.page === pagination.pages ? 'disabled' : ''}`;
+                nextLi.innerHTML = '<a class="page-link" href="#" data-page="' + (pagination.page + 1) + '">Next</a>';
+                paginationControls.appendChild(nextLi);
+            } catch (error) {
+                console.error('Error updating pagination:', error);
             }
+        }
 
-            // Next button
-            const nextLi = document.createElement('li');
-            nextLi.className = `page-item ${pagination.page === pagination.pages ? 'disabled' : ''}`;
-            nextLi.innerHTML = '<a class="page-link" href="#" data-page="' + (pagination.page + 1) + '">Next</a>';
-            paginationControls.appendChild(nextLi);
+        // --- Status Check Function ---
+        async function checkSystemStatus() {
+            try {
+                const response = await fetch('/status');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const status = await response.json();
+                
+                let statusMessage = `System Status:\n`;
+                statusMessage += `- Background Process: ${status.background_running ? '✅ Running' : '❌ Stopped'}\n`;
+                statusMessage += `- OpenAI: ${status.openai_connection_test ? '✅ Connected' : '❌ Failed'}\n`;
+                statusMessage += `- Processed Calls: ${status.processing_stats.total_processed}\n`;
+                statusMessage += `- Last Error: ${status.last_error || 'None'}`;
+                
+                showAlert(statusMessage, status.background_running && status.openai_connection_test ? 'success' : 'error');
+                
+            } catch (error) {
+                handleFetchError(error, 'check system status');
+            }
         }
 
         // --- Event Listeners ---
         document.getElementById('refreshCallsBtn').addEventListener('click', () => {
             currentPage = 1;
             fetchCallsList();
+            showAlert('Refreshing calls list...', 'success');
         });
 
         document.getElementById('clearFiltersBtn').addEventListener('click', () => {
@@ -740,7 +827,10 @@
             currentFilters = { agent: '', category: '', per_page: 50 };
             currentPage = 1;
             fetchCallsList();
+            showAlert('Filters cleared', 'success');
         });
+
+        document.getElementById('checkStatusBtn').addEventListener('click', checkSystemStatus);
 
         // Filter change handlers
         document.getElementById('agentFilter').addEventListener('change', (e) => {
@@ -774,19 +864,31 @@
         });
 
         // --- Auto-start functionality ---
-        // Initialize dashboard when page loads
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 Dashboard loading - System auto-started via Flask route');
             
-            // Initial data fetch
-            fetchDashboardData();
-            fetchCallsList();
-            
-            // Auto-refresh data every 10 seconds
-            setInterval(fetchDashboardData, 10000);
-            setInterval(fetchCallsList, 15000);
-            
-            console.log('✅ Dashboard initialized - Auto-refreshing every 10-15 seconds');
+            try {
+                // Initial data fetch
+                fetchDashboardData();
+                fetchCallsList();
+                
+                // Auto-refresh data every 15 seconds
+                setInterval(() => {
+                    try {
+                        fetchDashboardData();
+                        fetchCallsList();
+                    } catch (error) {
+                        console.error('Error in auto-refresh:', error);
+                    }
+                }, 15000);
+                
+                console.log('✅ Dashboard initialized - Auto-refreshing every 15 seconds');
+                showAlert('Dashboard loaded successfully! Monitoring NEW calls only.', 'success');
+                
+            } catch (error) {
+                console.error('Error initializing dashboard:', error);
+                showAlert('Error initializing dashboard. Check console for details.', 'error');
+            }
         });
     </script>
 </body>
