@@ -14,21 +14,12 @@ from typing import Dict, List, Optional, Tuple
 import re
 from bs4 import BeautifulSoup
 
-# Try to import Selenium
+# Try to import Playwright
 try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_AVAILABLE = True
 except ImportError:
-    SELENIUM_AVAILABLE = False
-
-# DISABLED: Deepgram SDK causes typing.Union errors - use direct API only
-DEEPGRAM_SDK_AVAILABLE = False
+    PLAYWRIGHT_AVAILABLE = False
 
 # OpenAI import
 try:
@@ -230,129 +221,126 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate WasteKing with improved Chrome setup"""
-    log_with_timestamp("🔐 Starting WasteKing authentication...")
+    """Authenticate WasteKing using Playwright"""
+    log_with_timestamp("🔐 Starting WasteKing authentication with Playwright...")
     
-    if not SELENIUM_AVAILABLE:
+    if not PLAYWRIGHT_AVAILABLE:
         return {
-            "error": "Selenium not available",
-            "status": "selenium_unavailable",
-            "message": "Chrome/Selenium not installed",
+            "error": "Playwright not available",
+            "status": "playwright_unavailable",
+            "message": "Playwright not installed. Install with: pip install playwright && playwright install chromium",
             "timestamp": datetime.now().isoformat()
         }
     
-    # Enhanced Chrome options for containers
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--single-process")
-    chrome_options.add_argument("--no-zygote")
-    chrome_options.add_argument("--disable-web-security")
-    chrome_options.add_argument("--disable-features=VizDisplayCompositor")
-    chrome_options.add_argument("--remote-debugging-port=9222")
-    chrome_options.add_argument("--disable-background-timer-throttling")
-    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
-    chrome_options.add_argument("--disable-renderer-backgrounding")
-    
-    # Detect container environment
-    is_container = any([
-        os.environ.get('PORT'),
-        os.environ.get('DYNO'),
-        os.environ.get('KOYEB_PUBLIC_DOMAIN'),
-        os.path.exists('/.dockerenv'),
-    ])
-    
-    if is_container:
-        log_with_timestamp("🐳 Container environment detected")
-        
-        # Try multiple Chrome binary locations
-        chrome_paths = [
-            '/usr/bin/google-chrome-stable',
-            '/usr/bin/google-chrome',
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/opt/google/chrome/chrome'
-        ]
-        
-        chrome_binary = None
-        for path in chrome_paths:
-            if os.path.exists(path):
-                chrome_binary = path
-                log_with_timestamp(f"✅ Found Chrome at: {path}")
-                break
-        
-        if chrome_binary:
-            chrome_options.binary_location = chrome_binary
-        else:
-            log_error("Chrome binary not found in any expected location")
-            return {
-                "error": "Chrome not installed",
-                "status": "chrome_not_found",
-                "message": "Chrome browser not found in container. Please install Chrome in your container.",
-                "timestamp": datetime.now().isoformat(),
-                "searched_paths": chrome_paths
-            }
-    
     try:
-        # Setup ChromeDriver service
-        chromedriver_paths = [
-            '/usr/local/bin/chromedriver',
-            '/usr/bin/chromedriver',
-            '/opt/chromedriver/chromedriver'
-        ]
-        
-        chromedriver_path = None
-        for path in chromedriver_paths:
-            if os.path.exists(path):
-                chromedriver_path = path
-                break
-        
-        if chromedriver_path:
-            service = Service(chromedriver_path)
-            log_with_timestamp(f"✅ Using ChromeDriver at: {chromedriver_path}")
-        else:
-            # Fallback to webdriver_manager
-            service = Service(ChromeDriverManager().install())
-            log_with_timestamp("📦 Using ChromeDriverManager for driver setup")
+        with sync_playwright() as p:
+            # Launch browser with container-optimized settings
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--single-process',
+                    '--no-zygote'
+                ]
+            )
             
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(30)
-        
-    except Exception as e:
-        log_error("Failed to setup Chrome", e)
-        return {
-            "error": "Chrome setup failed",
-            "status": "chrome_unavailable", 
-            "message": f"Chrome initialization failed: {str(e)}",
-            "timestamp": datetime.now().isoformat(),
-            "suggestion": "Install Chrome in your container using: apt-get update && apt-get install -y google-chrome-stable"
-        }
-    
-    # Rest of your authentication code remains the same...
-    try:
-        log_with_timestamp("🌐 Navigating to WasteKing...")
-        driver.get(WASTEKING_PRICING_URL)
-        
-        # Continue with existing authentication logic...
-        # [Keep all the existing authentication code after this point]
-        
+            context = browser.new_context(
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            
+            page = context.new_page()
+            page.set_default_timeout(30000)
+            
+            log_with_timestamp("🌐 Navigating to WasteKing...")
+            page.goto(WASTEKING_PRICING_URL)
+            
+            # Wait for login form or redirect
+            try:
+                page.wait_for_selector('input[name="email"], input[type="email"]', timeout=10000)
+                log_with_timestamp("🔍 Login form detected")
+            except:
+                log_with_timestamp("⚠️ No login form found - might already be logged in")
+                browser.close()
+                return {
+                    "error": "Login form not found",
+                    "status": "no_login_form",
+                    "message": "Could not find login form on the page",
+                    "timestamp": datetime.now().isoformat()
+                }
+            
+            # Fill login form
+            log_with_timestamp("📝 Filling login credentials...")
+            page.fill('input[name="email"], input[type="email"]', WASTEKING_EMAIL)
+            page.fill('input[name="password"], input[type="password"]', WASTEKING_PASSWORD)
+            
+            # Submit form
+            log_with_timestamp("🚀 Submitting login form...")
+            page.click('button[type="submit"], input[type="submit"]')
+            
+            # Wait for redirect or success
+            try:
+                page.wait_for_url('**/reporting/**', timeout=15000)
+                log_with_timestamp("✅ Login successful - redirected to reporting")
+            except:
+                log_with_timestamp("⚠️ Login might have failed - checking current URL")
+                current_url = page.url
+                if 'login' in current_url.lower():
+                    browser.close()
+                    return {
+                        "error": "Login failed",
+                        "status": "login_failed",
+                        "message": "Still on login page after form submission",
+                        "timestamp": datetime.now().isoformat()
+                    }
+            
+            # Extract cookies and create session
+            cookies = context.cookies()
+            session = requests.Session()
+            
+            for cookie in cookies:
+                session.cookies.set(
+                    cookie['name'], 
+                    cookie['value'], 
+                    domain=cookie.get('domain', ''),
+                    path=cookie.get('path', '/')
+                )
+            
+            session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json, text/html, */*',
+                'Accept-Language': 'en-US,en;q=0.9'
+            })
+            
+            browser.close()
+            
+            # Test session
+            test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
+            if test_response.status_code == 200:
+                save_wasteking_session(session)
+                log_with_timestamp("✅ WasteKing authentication successful!")
+                return session
+            else:
+                return {
+                    "error": "Session test failed",
+                    "status": "session_invalid",
+                    "message": f"Test request failed with status {test_response.status_code}",
+                    "timestamp": datetime.now().isoformat()
+                }
+            
     except Exception as e:
         log_error("WasteKing authentication failed", e)
         return {
             "error": "Authentication failed",
-            "status": "auth_failed",
+            "status": "auth_error",
             "message": f"Login process failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }
-    finally:
-        try:
-            driver.quit()
-        except:
-            pass
+
 def get_wasteking_prices():
     """Get WasteKing pricing data"""
     try:
@@ -447,8 +435,13 @@ def xelion_login() -> bool:
                 del xelion_session.headers['Authorization']
                 
             response = xelion_session.post(login_url, headers=headers, data=json.dumps(data_payload), timeout=30)
-            response.raise_for_status() 
             
+            log_with_timestamp(f"Login response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                log_error(f"Login failed with status {response.status_code}: {response.text}")
+                return False
+                
             login_response = response.json()
             session_token = login_response.get("authentication")
             
@@ -478,6 +471,8 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
             log_with_timestamp(f"Fetching communications (attempt {attempt + 1})")
             response = xelion_session.get(communications_url, params=params, timeout=30) 
             
+            log_with_timestamp(f"Communications response: {response.status_code}")
+            
             if response.status_code == 401:
                 log_with_timestamp("🔑 401 error, re-authenticating...")
                 global session_token
@@ -488,7 +483,13 @@ def _fetch_communications_page(limit: int, until_date: datetime, before_oid: Opt
                 else:
                     return [], None
             
-            response.raise_for_status()
+            if response.status_code != 200:
+                log_error(f"Communications API error: {response.status_code} - {response.text}")
+                if attempt == 2:
+                    return [], None
+                time.sleep(5)
+                continue
+            
             data = response.json()
             communications = data.get('data', [])
             
@@ -557,7 +558,7 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
     return agent_info
 
 def download_audio(communication_oid: str) -> Optional[str]:
-    """Download audio file with proper error handling"""
+    """Download audio file with improved error handling and debugging"""
     audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
@@ -567,33 +568,65 @@ def download_audio(communication_oid: str) -> Optional[str]:
         return file_path
     
     try:
-        log_with_timestamp(f"Downloading audio for OID {communication_oid}")
-        response = xelion_session.get(audio_url, timeout=60) 
+        log_with_timestamp(f"🎵 Downloading audio for OID {communication_oid} from: {audio_url}")
+        
+        # Add headers to mimic browser request
+        headers = {
+            'Accept': 'audio/mpeg,audio/*,*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+        }
+        
+        response = xelion_session.get(audio_url, headers=headers, timeout=60, stream=True)
+        
+        log_with_timestamp(f"Audio download response: {response.status_code}")
+        log_with_timestamp(f"Response headers: {dict(response.headers)}")
         
         if response.status_code == 200:
-            if len(response.content) > 1000:  # Ensure we got actual audio
-                with open(file_path, 'wb') as f:
-                    f.write(response.content)
-                file_size = len(response.content)
-                log_with_timestamp(f"Downloaded audio for OID {communication_oid} ({file_size} bytes)")
+            content_length = response.headers.get('content-length', 'unknown')
+            content_type = response.headers.get('content-type', 'unknown')
+            
+            log_with_timestamp(f"Content-Length: {content_length}, Content-Type: {content_type}")
+            
+            # Download in chunks
+            total_size = 0
+            with open(file_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        total_size += len(chunk)
+            
+            log_with_timestamp(f"Downloaded {total_size} bytes for OID {communication_oid}")
+            
+            if total_size > 1000:  # Ensure we got actual audio
+                log_with_timestamp(f"✅ Audio download successful for OID {communication_oid}")
                 return file_path
             else:
-                log_with_timestamp(f"Audio file too small for OID {communication_oid}")
+                log_with_timestamp(f"❌ Audio file too small for OID {communication_oid} ({total_size} bytes)")
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
                 return None
         elif response.status_code == 404:
-            log_with_timestamp(f"No audio found for OID {communication_oid}")
+            log_with_timestamp(f"❌ No audio found for OID {communication_oid}")
+            return None
+        elif response.status_code == 401:
+            log_with_timestamp(f"🔑 Audio download requires re-authentication for OID {communication_oid}")
             return None
         else:
             log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code}")
+            log_error(f"Response text: {response.text[:500]}")
             return None
             
     except Exception as e:
         log_error(f"Audio download failed for {communication_oid}", e)
         return None
 
-# --- FIXED Deepgram Transcription (Direct API Only) ---
+# --- Deepgram Transcription ---
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
-    """Transcribe audio file using Deepgram DIRECT API ONLY - no SDK"""
+    """Transcribe audio file using Deepgram direct API"""
     if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
         log_error("Deepgram API key not configured")
         return None
@@ -605,7 +638,15 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         return None
     
     try:
-        # Use ONLY direct API - completely remove SDK dependency
+        # Check file size
+        file_size = os.path.getsize(audio_file_path)
+        log_with_timestamp(f"🎵 Transcribing audio file: {file_size} bytes")
+        
+        if file_size < 1000:
+            log_error(f"Audio file too small: {file_size} bytes")
+            return None
+        
+        # Use direct API
         url = "https://api.deepgram.com/v1/listen"
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
         params = {
@@ -617,12 +658,17 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             "language": "en-GB"
         }
         
-        log_with_timestamp(f"Transcribing OID {oid} using Deepgram direct API...")
+        log_with_timestamp(f"🎯 Transcribing OID {oid} using Deepgram API...")
         
         with open(audio_file_path, 'rb') as audio_file:
             response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
         
-        response.raise_for_status()
+        log_with_timestamp(f"Deepgram response: {response.status_code}")
+        
+        if response.status_code != 200:
+            log_error(f"Deepgram API error: {response.status_code} - {response.text}")
+            return None
+        
         result = response.json()
         
         # Validate response structure
@@ -647,10 +693,10 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         confidence = transcript_data.get('confidence', 0)
         language = metadata.get('detected_language', 'en')
         
-        log_with_timestamp(f"✅ Deepgram API transcribed OID {oid} successfully")
+        log_with_timestamp(f"✅ Deepgram transcription successful for OID {oid}")
 
         if not transcript_text.strip():
-            log_with_timestamp(f"Empty transcription for OID {oid}", "WARN")
+            log_with_timestamp(f"⚠️ Empty transcription for OID {oid}", "WARN")
             return None
         
         # Calculate costs
@@ -659,7 +705,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         cost_gbp = cost_usd * USD_TO_GBP_RATE
         word_count = len(transcript_text.split())
 
-        log_with_timestamp(f"Transcription complete for OID {oid}: {word_count} words, {duration_minutes:.2f} minutes")
+        log_with_timestamp(f"📊 Transcription complete for OID {oid}: {word_count} words, {duration_minutes:.2f} minutes")
 
         return {
             'oid': oid,
@@ -672,15 +718,10 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             'language': language
         }
             
-    except requests.exceptions.RequestException as e:
-        log_error(f"Deepgram API request failed for OID {oid}", e)
-        return None
-    except json.JSONDecodeError as e:
-        log_error(f"Failed to parse Deepgram response for OID {oid}", e)
-        return None
     except Exception as e:
         log_error(f"Deepgram transcription failed for OID {oid}", e)
         return None
+
 # --- OpenAI Analysis ---
 def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> Optional[Dict]:
     """Analyze transcription with OpenAI"""
@@ -733,7 +774,7 @@ def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> 
     if len(transcript) > 4000:
         transcript = transcript[:4000] + "... (truncated)"
     
-    log_with_timestamp(f"Starting OpenAI analysis for OID {oid}")
+    log_with_timestamp(f"🤖 Starting OpenAI analysis for OID {oid}")
     
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -833,7 +874,7 @@ def categorize_call(transcript: str) -> str:
 
 # --- Main Processing Logic ---
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call with full pipeline"""
+    """Process single call with full pipeline and enhanced debugging"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
     
@@ -848,21 +889,26 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
         if cursor.fetchone():
             conn.close()
+            log_with_timestamp(f"⏭️ OID {oid} already processed, skipping")
             return None
         conn.close()
 
-    log_with_timestamp(f"Processing OID: {oid}")
+    log_with_timestamp(f"🚀 Processing OID: {oid}")
 
     try:
         raw_data = json.dumps(communication_data)
+        xelion_metadata = _extract_agent_info(comm_obj)
+        call_datetime = comm_obj.get('date', 'Unknown')
+        
+        log_with_timestamp(f"📊 Call info - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
         
         # Download Audio
         audio_file_path = download_audio(oid)
         if not audio_file_path:
             # Store metadata without audio
-            xelion_metadata = _extract_agent_info(comm_obj)
-            call_datetime = comm_obj.get('date', 'Unknown')
             call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'cancelled'] else "No Audio"
+            
+            log_with_timestamp(f"❌ No audio for OID {oid}, storing as {call_category}")
             
             with db_lock:
                 conn = get_db_connection()
@@ -882,6 +928,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     ))
                     conn.commit()
                     processing_stats['total_processed'] += 1
+                    log_with_timestamp(f"✅ Stored OID {oid} without audio")
                 except Exception as e:
                     log_error(f"Database error storing OID {oid} (No Audio)", e)
                     processing_stats['total_errors'] += 1
@@ -890,19 +937,17 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             return None
 
         # Transcribe Audio
-        xelion_metadata = _extract_agent_info(comm_obj)
-        call_datetime = comm_obj.get('date', 'Unknown')
-
         transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
         
         # Delete Audio File
         try:
             os.remove(audio_file_path)
-            log_with_timestamp(f"Deleted audio file: {audio_file_path}")
+            log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
         except Exception as e:
             log_error(f"Error deleting audio file", e)
 
         if not transcription_result:
+            log_with_timestamp(f"❌ Transcription failed for OID {oid}")
             processing_stats['total_errors'] += 1
             return None
 
@@ -1089,8 +1134,7 @@ init_db()
 
 # Test configurations on startup
 log_with_timestamp("🚀 Application starting up...")
-log_with_timestamp(f"Selenium available: {SELENIUM_AVAILABLE}")
-log_with_timestamp(f"Deepgram SDK available: {DEEPGRAM_SDK_AVAILABLE}")
+log_with_timestamp(f"Playwright available: {PLAYWRIGHT_AVAILABLE}")
 log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
 
 if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
@@ -1121,8 +1165,7 @@ def get_status():
     return jsonify({
         "background_running": background_process_running,
         "processing_stats": processing_stats,
-        "selenium_available": SELENIUM_AVAILABLE,
-        "deepgram_available": DEEPGRAM_SDK_AVAILABLE,
+        "playwright_available": PLAYWRIGHT_AVAILABLE,
         "openai_available": OPENAI_AVAILABLE,
         "openai_connection_test": openai_test_result,
         "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
