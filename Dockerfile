@@ -1,11 +1,10 @@
-# Use Python 3.12 slim as base
-FROM python:3.12-slim
+# Use Python 3.11 for better compatibility
+FROM python:3.11-slim
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     curl \
-    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -15,10 +14,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
-RUN playwright install chromium
-RUN playwright install-deps chromium
-
 # Copy application code
 COPY . .
 
@@ -27,7 +22,6 @@ RUN mkdir -p temp_audio
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 
 # Expose port
 EXPOSE 5000
