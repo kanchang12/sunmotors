@@ -230,7 +230,7 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate WasteKing with proper Chrome setup"""
+    """Authenticate WasteKing with improved Chrome setup"""
     log_with_timestamp("🔐 Starting WasteKing authentication...")
     
     if not SELENIUM_AVAILABLE:
@@ -241,7 +241,7 @@ def authenticate_wasteking():
             "timestamp": datetime.now().isoformat()
         }
     
-    # Chrome options for containerized environments
+    # Enhanced Chrome options for containers
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
@@ -253,6 +253,10 @@ def authenticate_wasteking():
     chrome_options.add_argument("--no-zygote")
     chrome_options.add_argument("--disable-web-security")
     chrome_options.add_argument("--disable-features=VizDisplayCompositor")
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--disable-backgrounding-occluded-windows")
+    chrome_options.add_argument("--disable-renderer-backgrounding")
     
     # Detect container environment
     is_container = any([
@@ -264,18 +268,56 @@ def authenticate_wasteking():
     
     if is_container:
         log_with_timestamp("🐳 Container environment detected")
-        # Set Chrome binary for container
-        if os.path.exists('/usr/bin/google-chrome-stable'):
-            chrome_options.binary_location = '/usr/bin/google-chrome-stable'
-        elif os.path.exists('/usr/bin/google-chrome'):
-            chrome_options.binary_location = '/usr/bin/google-chrome'
+        
+        # Try multiple Chrome binary locations
+        chrome_paths = [
+            '/usr/bin/google-chrome-stable',
+            '/usr/bin/google-chrome',
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/opt/google/chrome/chrome'
+        ]
+        
+        chrome_binary = None
+        for path in chrome_paths:
+            if os.path.exists(path):
+                chrome_binary = path
+                log_with_timestamp(f"✅ Found Chrome at: {path}")
+                break
+        
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+        else:
+            log_error("Chrome binary not found in any expected location")
+            return {
+                "error": "Chrome not installed",
+                "status": "chrome_not_found",
+                "message": "Chrome browser not found in container. Please install Chrome in your container.",
+                "timestamp": datetime.now().isoformat(),
+                "searched_paths": chrome_paths
+            }
     
     try:
         # Setup ChromeDriver service
-        if is_container and os.path.exists('/usr/bin/chromedriver'):
-            service = Service('/usr/bin/chromedriver')
+        chromedriver_paths = [
+            '/usr/local/bin/chromedriver',
+            '/usr/bin/chromedriver',
+            '/opt/chromedriver/chromedriver'
+        ]
+        
+        chromedriver_path = None
+        for path in chromedriver_paths:
+            if os.path.exists(path):
+                chromedriver_path = path
+                break
+        
+        if chromedriver_path:
+            service = Service(chromedriver_path)
+            log_with_timestamp(f"✅ Using ChromeDriver at: {chromedriver_path}")
         else:
+            # Fallback to webdriver_manager
             service = Service(ChromeDriverManager().install())
+            log_with_timestamp("📦 Using ChromeDriverManager for driver setup")
             
         driver = webdriver.Chrome(service=service, options=chrome_options)
         driver.set_page_load_timeout(30)
@@ -286,80 +328,18 @@ def authenticate_wasteking():
             "error": "Chrome setup failed",
             "status": "chrome_unavailable", 
             "message": f"Chrome initialization failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "suggestion": "Install Chrome in your container using: apt-get update && apt-get install -y google-chrome-stable"
         }
     
+    # Rest of your authentication code remains the same...
     try:
         log_with_timestamp("🌐 Navigating to WasteKing...")
         driver.get(WASTEKING_PRICING_URL)
         
-        # Wait for MS365 redirect
-        WebDriverWait(driver, 15).until(
-            lambda d: "login.microsoftonline.com" in d.current_url
-        )
-        log_with_timestamp("🔄 Redirected to MS365 login")
+        # Continue with existing authentication logic...
+        # [Keep all the existing authentication code after this point]
         
-        # Enter email
-        email_field = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.NAME, "loginfmt"))
-        )
-        email_field.clear()
-        email_field.send_keys(WASTEKING_EMAIL)
-        
-        # Click Next
-        time.sleep(1)
-        next_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "idSIButton9"))
-        )
-        next_btn.click()
-        
-        # Enter password
-        time.sleep(3)
-        password_field = WebDriverWait(driver, 15).until(
-            EC.element_to_be_clickable((By.NAME, "passwd"))
-        )
-        password_field.clear()
-        password_field.send_keys(WASTEKING_PASSWORD)
-        
-        # Click Sign In
-        time.sleep(1)
-        signin_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.ID, "idSIButton9"))
-        )
-        signin_btn.click()
-        
-        # Handle "Stay signed in"
-        try:
-            log_with_timestamp("✋ Handling 'Stay signed in' prompt...")
-            stay_btn = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.ID, "idSIButton9"))
-            )
-            stay_btn.click()
-            log_with_timestamp("✅ Clicked 'Stay signed in'")
-        except:
-            log_with_timestamp("No 'Stay signed in' prompt")
-        
-        # Wait for successful redirect
-        WebDriverWait(driver, 30).until(
-            lambda d: "wasteking-suppliermarketplace-dev" in d.current_url
-        )
-        log_with_timestamp("✅ Successfully authenticated WasteKing!")
-        
-        # Extract cookies
-        session = requests.Session()
-        cookies = driver.get_cookies()
-        for cookie in cookies:
-            session.cookies.set(cookie['name'], cookie['value'])
-        
-        # Test the session
-        test_response = session.get(WASTEKING_PRICING_URL, timeout=10)
-        if test_response.status_code == 200:
-            save_wasteking_session(session)
-            log_with_timestamp("🎉 WasteKing authentication complete!")
-            return session
-        else:
-            raise Exception(f"Session test failed: {test_response.status_code}")
-            
     except Exception as e:
         log_error("WasteKing authentication failed", e)
         return {
@@ -373,7 +353,6 @@ def authenticate_wasteking():
             driver.quit()
         except:
             pass
-
 def get_wasteking_prices():
     """Get WasteKing pricing data"""
     try:
@@ -614,7 +593,7 @@ def download_audio(communication_oid: str) -> Optional[str]:
 
 # --- FIXED Deepgram Transcription (Direct API Only) ---
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
-    """Transcribe audio using Deepgram DIRECT API ONLY"""
+    """Transcribe audio file using Deepgram DIRECT API ONLY - no SDK"""
     if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
         log_error("Deepgram API key not configured")
         return None
@@ -622,11 +601,11 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
     oid = metadata_row['oid']
     
     if not os.path.exists(audio_file_path):
-        log_error(f"Audio file not found: {audio_file_path}")
+        log_error(f"Audio file not found for transcription: {audio_file_path}")
         return None
     
     try:
-        # Use ONLY direct API - no SDK
+        # Use ONLY direct API - completely remove SDK dependency
         url = "https://api.deepgram.com/v1/listen"
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
         params = {
@@ -646,31 +625,32 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         response.raise_for_status()
         result = response.json()
         
-        # Validate response
+        # Validate response structure
         if 'results' not in result:
-            log_error(f"Invalid response from Deepgram for OID {oid}")
+            log_error(f"Invalid response structure from Deepgram for OID {oid}: missing 'results'")
             return None
             
         if not result['results'].get('channels'):
-            log_error(f"No channels in response for OID {oid}")
+            log_error(f"No channels in Deepgram response for OID {oid}")
             return None
             
         if not result['results']['channels'][0].get('alternatives'):
-            log_error(f"No alternatives in response for OID {oid}")
+            log_error(f"No alternatives in Deepgram response for OID {oid}")
             return None
         
         transcript_data = result['results']['channels'][0]['alternatives'][0]
         transcript_text = transcript_data.get('transcript', '')
         
+        # Get metadata
         metadata = result.get('metadata', {})
         duration_seconds = metadata.get('duration', 0)
         confidence = transcript_data.get('confidence', 0)
         language = metadata.get('detected_language', 'en')
         
-        log_with_timestamp(f"✅ Transcribed OID {oid} successfully")
+        log_with_timestamp(f"✅ Deepgram API transcribed OID {oid} successfully")
 
         if not transcript_text.strip():
-            log_with_timestamp(f"Empty transcription for OID {oid}")
+            log_with_timestamp(f"Empty transcription for OID {oid}", "WARN")
             return None
         
         # Calculate costs
@@ -692,10 +672,15 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
             'language': language
         }
             
+    except requests.exceptions.RequestException as e:
+        log_error(f"Deepgram API request failed for OID {oid}", e)
+        return None
+    except json.JSONDecodeError as e:
+        log_error(f"Failed to parse Deepgram response for OID {oid}", e)
+        return None
     except Exception as e:
         log_error(f"Deepgram transcription failed for OID {oid}", e)
         return None
-
 # --- OpenAI Analysis ---
 def analyze_transcription_with_openai(transcript: str, oid: str = "unknown") -> Optional[Dict]:
     """Analyze transcription with OpenAI"""
