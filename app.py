@@ -614,52 +614,73 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
     return agent_info
 
 def download_audio(communication_oid: str) -> Optional[str]:
-    """Download audio using the WORKING pattern from transcription.py"""
+    """Download audio with better error handling and retry logic"""
     audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
 
     if os.path.exists(file_path):
-        log_with_timestamp(f"Audio for OID {communication_oid} already exists: {file_path}")
+        log_with_timestamp(f"Audio for OID {communication_oid} already exists")
         return file_path
     
-    try:
-        log_with_timestamp(f"🎵 Downloading audio for OID {communication_oid} from: {audio_url}")
-        
-        response = xelion_session.get(audio_url, timeout=60)
-        
-        log_with_timestamp(f"Audio download response: {response.status_code}")
-        
-        if response.status_code == 200:
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-            log_with_timestamp(f"Downloaded OID {communication_oid} ({len(response.content)} bytes)")
+    # Try multiple times with re-auth if needed
+    for attempt in range(3):
+        try:
+            log_with_timestamp(f"🎵 Downloading audio for OID {communication_oid} (attempt {attempt + 1})")
             
-            if len(response.content) > 1000:  # Ensure we got actual audio
-                log_with_timestamp(f"✅ Audio download successful for OID {communication_oid}")
-                return file_path
-            else:
-                log_with_timestamp(f"❌ Audio file too small for OID {communication_oid} ({len(response.content)} bytes)")
-                try:
-                    os.remove(file_path)
-                except:
-                    pass
+            # Ensure we're authenticated
+            global session_token
+            if not session_token:
+                log_with_timestamp(f"No session token, re-authenticating...")
+                if not xelion_login():
+                    log_with_timestamp(f"Re-auth failed for audio download")
+                    continue
+            
+            response = xelion_session.get(audio_url, timeout=60)
+            
+            log_with_timestamp(f"Audio response: {response.status_code} for OID {communication_oid}")
+            
+            if response.status_code == 200:
+                content_length = len(response.content)
+                log_with_timestamp(f"Downloaded {content_length} bytes for OID {communication_oid}")
+                
+                if content_length > 1000:  # Valid audio file
+                    with open(file_path, 'wb') as f:
+                        f.write(response.content)
+                    log_with_timestamp(f"✅ Audio saved successfully for OID {communication_oid}")
+                    return file_path
+                else:
+                    log_with_timestamp(f"❌ Audio too small ({content_length} bytes) for OID {communication_oid}")
+                    return None
+                    
+            elif response.status_code == 404:
+                log_with_timestamp(f"❌ No audio file exists for OID {communication_oid}")
                 return None
-        elif response.status_code == 404:
-            log_with_timestamp(f"❌ No audio found for OID {communication_oid}")
-            return None
-        elif response.status_code == 401:
-            log_with_timestamp(f"🔑 401: Re-authenticating for OID {communication_oid}")
-            if xelion_login():
-                return download_audio(communication_oid)  # Retry after re-auth
-            return None
-        else:
-            log_error(f"Failed to download audio for {communication_oid}: HTTP {response.status_code} - {response.text[:200]}")
-            return None
-            
-    except Exception as e:
-        log_error(f"Audio download failed for {communication_oid}", e)
-        return None
+                
+            elif response.status_code == 401:
+                log_with_timestamp(f"🔑 401 Auth error for OID {communication_oid}, retrying with fresh auth...")
+                session_token = None  # Force re-auth
+                if xelion_login():
+                    continue  # Retry with fresh token
+                else:
+                    log_with_timestamp(f"❌ Re-auth failed for OID {communication_oid}")
+                    return None
+                    
+            else:
+                log_with_timestamp(f"❌ Unexpected response {response.status_code} for OID {communication_oid}")
+                if attempt == 2:  # Last attempt
+                    return None
+                time.sleep(2)  # Wait before retry
+                continue
+                
+        except Exception as e:
+            log_error(f"Audio download attempt {attempt + 1} failed for {communication_oid}", e)
+            if attempt == 2:  # Last attempt
+                return None
+            time.sleep(2)  # Wait before retry
+    
+    log_with_timestamp(f"❌ All audio download attempts failed for OID {communication_oid}")
+    return None
 
 # --- Deepgram Transcription ---
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
@@ -909,9 +930,8 @@ def categorize_call(transcript: str) -> str:
         return "complaint"
     return "general enquiry"
 
-# --- Main Processing Logic ---
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call using WORKING patterns from transcription.py"""
+    """Process single call - only download audio for answered calls with duration"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
     
@@ -938,11 +958,16 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         
         log_with_timestamp(f"📊 Call - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
         
-        # Try to download audio for any call (let the API decide what's available)
-        audio_file_path = download_audio(oid)
+        # ONLY try audio download for answered calls with duration > 30 seconds
+        if xelion_metadata['status'].lower() == 'answer' and xelion_metadata['duration_seconds'] > 30:
+            log_with_timestamp(f"🎵 Call answered with {xelion_metadata['duration_seconds']}s - downloading audio")
+            audio_file_path = download_audio(oid)
+        else:
+            log_with_timestamp(f"⏭️ Skipping audio - Status: {xelion_metadata['status']}, Duration: {xelion_metadata['duration_seconds']}s")
+            audio_file_path = None
         
         if not audio_file_path:
-            # Store metadata without audio - use the WORKING pattern
+            # Store without audio
             call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
             
             with db_lock:
@@ -977,17 +1002,49 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         # Delete Audio File
         try:
             os.remove(audio_file_path)
+            log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
         except Exception as e:
             log_error(f"Error deleting audio file", e)
 
         if not transcription_result:
             processing_stats['total_errors'] += 1
+            # Store with transcription failure
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                try:
+                    cursor.execute('''
+                        INSERT INTO calls (
+                            oid, call_datetime, agent_name, phone_number, call_direction, 
+                            duration_seconds, status, user_id, category, processed_at, 
+                            raw_communication_data, summary_translation, processing_error
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                        xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
+                        xelion_metadata['user_id'], "Transcription Failed", datetime.now().isoformat(), 
+                        raw_data, "Transcription failed", "Deepgram transcription failed"
+                    ))
+                    conn.commit()
+                    processing_stats['total_processed'] += 1
+                    log_with_timestamp(f"✅ Stored OID {oid} with transcription failure")
+                except Exception as e:
+                    log_error(f"Database error storing OID {oid} (Transcription Failed)", e)
+                finally:
+                    conn.close()
             return None
 
         # Analyze with OpenAI
         openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
         if not openai_analysis:
-            openai_analysis = {"summary": "Analysis failed"}
+            openai_analysis = {
+                "customer_engagement": {"score": 0, "active_listening": 0, "probing_questions": 0, "empathy_understanding": 0, "clarity_conciseness": 0},
+                "politeness": {"score": 0, "greeting_closing": 0, "tone_demeanor": 0, "respectful_language": 0, "handling_interruptions": 0},
+                "professional_knowledge": {"score": 0, "product_service_info": 0, "policy_adherence": 0, "problem_diagnosis": 0, "solution_offering": 0},
+                "customer_resolution": {"score": 0, "issue_identification": 0, "solution_effectiveness": 0, "time_to_resolution": 0, "follow_up_next_steps": 0},
+                "overall_score": 0,
+                "summary": "OpenAI analysis failed"
+            }
 
         # Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
