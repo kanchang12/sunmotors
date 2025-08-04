@@ -222,7 +222,6 @@ def _transcribe_audio(file_path: str) -> Optional[Dict]:
         log_with_timestamp(f"🎙️ Transcribing {file_path} with Deepgram...")
         with open(file_path, 'rb') as audio_file:
             headers = {
-                'Content-Type': 'audio/mpeg',
                 'Authorization': f'Token {DEEPGRAM_API_KEY}'
             }
             params = {
@@ -232,11 +231,14 @@ def _transcribe_audio(file_path: str) -> Optional[Dict]:
                 'smart_format': True,
                 'diarize': True
             }
+            files = {
+                'file': ('audio.mp3', audio_file, 'audio/mpeg')
+            }
             response = requests.post(
                 'https://api.deepgram.com/v1/listen',
                 headers=headers,
                 params=params,
-                data=audio_file
+                files=files
             )
             response.raise_for_status()
             results = response.json()
