@@ -962,9 +962,19 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         log_with_timestamp(f"🎵 Attempting audio download for OID {oid} (ignoring status/duration)")
         audio_file_path = download_audio(oid)
         
-        if not audio_file_path:
-            # Store without audio
+         if not audio_file_path:
+            # Store without audio with detailed reason
             call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
+            
+            # Determine specific reason for no audio
+            if xelion_metadata['status'].lower() in ['missed', 'noanswer']:
+                audio_reason = f"Call was {xelion_metadata['status'].lower()} - no audio recorded"
+            elif xelion_metadata['status'].lower() == 'cancelled':
+                audio_reason = "Call was cancelled before connection - no audio recorded"
+            elif xelion_metadata['duration_seconds'] < 5:
+                audio_reason = f"Call too short ({xelion_metadata['duration_seconds']}s) - no meaningful audio"
+            else:
+                audio_reason = f"Audio file not available from Xelion API (Status: {xelion_metadata['status']}, Duration: {xelion_metadata['duration_seconds']}s)"
             
             with db_lock:
                 conn = get_db_connection()
@@ -974,13 +984,13 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         INSERT INTO calls (
                             oid, call_datetime, agent_name, phone_number, call_direction, 
                             duration_seconds, status, user_id, category, processed_at, 
-                            raw_communication_data, summary_translation
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            raw_communication_data, summary_translation, processing_error
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
                         xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
                         xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
-                        raw_data, "No audio available"
+                        raw_data, audio_reason, audio_reason
                     ))
                     conn.commit()
                     processing_stats['total_processed'] += 1
