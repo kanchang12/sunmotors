@@ -513,8 +513,8 @@ def xelion_login() -> bool:
             log_error(f"Failed to log in to Xelion", e)
             return False
 
-def fetch_all_communications(until_date: datetime) -> List[Dict]:
-    """Fetch ALL communications without limit using pagination"""
+def fetch_all_communications_from_start_time(until_date: datetime, start_time: datetime) -> List[Dict]:
+    """Fetch UNLIMITED calls but ONLY from start_time onwards (Aug 4th 2025 9 AM+)"""
     all_communications = []
     before_oid = None
     page = 1
@@ -539,7 +539,7 @@ def fetch_all_communications(until_date: datetime) -> List[Dict]:
             for base_url in base_urls_to_try:
                 communications_url = f"{base_url.rstrip('/')}/communications"
                 try:
-                    log_with_timestamp(f"Fetching page {page} from {communications_url} (attempt {attempt + 1})")
+                    log_with_timestamp(f"Fetching UNLIMITED page {page} from {communications_url} (attempt {attempt + 1})")
                     response = xelion_session.get(communications_url, params=params, timeout=30)
                     
                     if response.status_code == 401:
@@ -560,26 +560,65 @@ def fetch_all_communications(until_date: datetime) -> List[Dict]:
                         log_with_timestamp(f"No more communications found on page {page}")
                         return all_communications
                     
-                    all_communications.extend(communications)
-                    log_with_timestamp(f"Page {page}: Fetched {len(communications)} communications (Total: {len(all_communications)})")
+                    # CHECK: Stop if we've gone too far back (before start_time)
+                    page_has_valid_calls = False
+                    valid_calls_this_page = []
                     
-                    # Track status breakdown for this page
-                    status_breakdown = {}
                     for comm in communications:
+                        comm_obj = comm.get('object', {})
+                        call_datetime = comm_obj.get('date', '')
+                        
+                        if call_datetime:
+                            try:
+                                if 'T' in call_datetime:
+                                    call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+                                else:
+                                    call_dt = datetime.strptime(call_datetime, '%Y-%m-%d %H:%M:%S')
+                                
+                                # If this call is from start_time or later, keep it
+                                if call_dt >= start_time:
+                                    valid_calls_this_page.append(comm)
+                                    page_has_valid_calls = True
+                                # If call is older than start_time, we've gone too far back
+                                else:
+                                    log_with_timestamp(f"⏹️ Reached call older than start time ({call_dt} < {start_time})")
+                                    # Add valid calls from this page and stop
+                                    all_communications.extend(valid_calls_this_page)
+                                    log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+                                    return all_communications
+                                    
+                            except Exception as e:
+                                log_with_timestamp(f"Error parsing date {call_datetime}: {e}")
+                    
+                    # If no valid calls on this page, we're done
+                    if not page_has_valid_calls:
+                        log_with_timestamp(f"⏹️ No calls from {start_time} onwards on page {page}")
+                        log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+                        return all_communications
+                    
+                    # Add valid calls from this page
+                    all_communications.extend(valid_calls_this_page)
+                    log_with_timestamp(f"Page {page}: Added {len(valid_calls_this_page)} valid calls (Total: {len(all_communications)})")
+                    
+                    # Track status breakdown for valid calls only
+                    status_breakdown = {}
+                    for comm in valid_calls_this_page:
                         status = comm.get('object', {}).get('status', 'unknown')
                         status_breakdown[status] = status_breakdown.get(status, 0) + 1
                         processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
                     
-                    log_with_timestamp(f"Page {page} status breakdown: {status_breakdown}")
+                    log_with_timestamp(f"Page {page} valid calls status: {status_breakdown}")
                     
                     # Get next page info
                     if 'meta' in data and 'paging' in data['meta']:
                         before_oid = data['meta']['paging'].get('previousId')
                         if not before_oid:
                             log_with_timestamp("No more pages available")
+                            log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
                             return all_communications
                     else:
                         log_with_timestamp("No paging info, assuming last page")
+                        log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
                         return all_communications
                     
                     fetched_this_page = True
@@ -603,6 +642,7 @@ def fetch_all_communications(until_date: datetime) -> List[Dict]:
         # Small delay between pages
         time.sleep(0.5)
     
+    log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
     return all_communications
 
 def _extract_agent_info(comm_obj: Dict) -> Dict:
@@ -1097,7 +1137,7 @@ def fetch_and_transcribe_recent_calls():
     # FIXED START TIME: August 4th 2025 9:00 AM
     START_TIME = datetime(2025, 8, 4, 9, 0, 0)
     
-    log_with_timestamp(f"🚀 Starting UNLIMITED call monitoring from {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}")
+    log_with_timestamp(f"🚀 Starting UNLIMITED call monitoring from {START_TIME.strftime('%Y-%m-%d %H:%M:%S')} ONWARDS ONLY (no older calls)")
     
     # Initial login
     if not xelion_login():
@@ -1122,12 +1162,12 @@ def fetch_and_transcribe_recent_calls():
                 log_with_timestamp(f"⚠️ Error parsing last processed time: {e}")
         conn.close()
 
-    log_with_timestamp(f"🔍 Starting UNLIMITED monitoring from: {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    log_with_timestamp(f"🔍 Starting UNLIMITED monitoring from: {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')} (Aug 4th 9 AM+ only)")
 
     # MAIN MONITORING LOOP - RUNS FOREVER
     while background_process_running:
         try:
-            log_with_timestamp(f"🔄 UNLIMITED polling for calls since {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            log_with_timestamp(f"🔄 UNLIMITED polling for calls from {START_TIME.strftime('%Y-%m-%d %H:%M:%S')} onwards (since last processed: {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')})")
             
             # Ensure we're logged in
             global session_token
@@ -1138,16 +1178,16 @@ def fetch_and_transcribe_recent_calls():
                     time.sleep(60)
                     continue
             
-            # Fetch ALL communications UNLIMITED
+            # Fetch ALL communications UNLIMITED but ONLY from START_TIME onwards
             fetch_until = datetime.now()
-            all_comms = fetch_all_communications(until_date=fetch_until)
+            all_comms = fetch_all_communications_from_start_time(until_date=fetch_until, start_time=START_TIME)
             
             if not all_comms:
                 log_with_timestamp("📭 No communications found, waiting 60 seconds...")
                 time.sleep(60)
                 continue
             
-            log_with_timestamp(f"🎯 TOTAL COMMUNICATIONS FETCHED: {len(all_comms)}")
+            log_with_timestamp(f"🎯 UNLIMITED CALLS FROM {START_TIME.strftime('%Y-%m-%d %H:%M:%S')} ONWARDS: {len(all_comms)}")
             
             # Filter to NEW calls only
             new_calls = []
