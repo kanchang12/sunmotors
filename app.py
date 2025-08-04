@@ -1060,41 +1060,72 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         processing_stats['total_errors'] += 1
         return None
 
- result:
+def fetch_and_transcribe_recent_calls():
+    """FIXED - Continuous monitoring from Aug 4th 2025 9AM onwards"""
+    global background_process_running
+    background_process_running = True
+    
+    # FIXED START TIME: August 4th 2025 9:00 AM
+    START_TIME = datetime(2025, 8, 4, 9, 0, 0)
+    
+    log_with_timestamp(f"🚀 Starting AUDIO-ONLY call monitoring from {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Initial login
+    if not xelion_login():
+        log_error("Initial Xelion login failed")
+        background_process_running = False
+        return
+
+    # Get the latest call datetime from database to continue from where we left off
+    last_processed_time = START_TIME
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(call_datetime) FROM calls WHERE call_datetime IS NOT NULL")
+        result = cursor.fetchone()[0]
+        if result:
             try:
                 db_time = datetime.fromisoformat(result.replace('Z', '+00:00'))
                 if db_time > START_TIME:
                     last_processed_time = db_time
                     log_with_timestamp(f"📞 Resuming from last processed call: {last_processed_time}")
-            except:
-                pass
+            except Exception as e:
+                log_with_timestamp(f"⚠️ Error parsing last processed time: {e}")
         conn.close()
 
-    log_with_timestamp(f"🔍 Starting monitoring from: {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    log_with_timestamp(f"🔍 Starting continuous monitoring from: {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        while background_process_running:
-            try:
-                log_with_timestamp(f"🔄 Polling for calls since {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')}")
-                
-                # Fetch recent communications (last 2 hours to ensure we don't miss any)
-                fetch_until = datetime.now()
-                fetch_since = max(last_processed_time - timedelta(minutes=10), START_TIME)  # 10 min overlap to be safe
-                
-                comms, _ = _fetch_communications_page(limit=100, until_date=fetch_until)
-                
-                if not comms:
-                    log_with_timestamp("📭 No communications found")
-                    time.sleep(60)  # Wait 1 minute before next poll
+    # MAIN MONITORING LOOP - RUNS FOREVER
+    while background_process_running:
+        try:
+            log_with_timestamp(f"🔄 Polling for calls since {last_processed_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Ensure we're logged in
+            global session_token
+            if not session_token:
+                log_with_timestamp("🔑 No session token, re-authenticating...")
+                if not xelion_login():
+                    log_error("Re-authentication failed, will retry in 60 seconds")
+                    time.sleep(60)
                     continue
-                
-                # Filter to calls since our start time and not already in database
-                new_calls = []
-                latest_call_time = last_processed_time
-                
-                log_with_timestamp(f"🔍 Examining {len(comms)} communications for new calls...")
-                
-                for comm in comms:
+            
+            # Fetch recent communications
+            fetch_until = datetime.now()
+            comms, _ = _fetch_communications_page(limit=100, until_date=fetch_until)
+            
+            if not comms:
+                log_with_timestamp("📭 No communications found, waiting 60 seconds...")
+                time.sleep(60)
+                continue
+            
+            # Filter to NEW calls only
+            new_calls = []
+            latest_call_time = last_processed_time
+            
+            log_with_timestamp(f"🔍 Examining {len(comms)} communications for new calls...")
+            
+            for comm in comms:
+                try:
                     comm_obj = comm.get('object', {})
                     call_datetime = comm_obj.get('date', '')
                     oid = comm_obj.get('oid')
@@ -1102,59 +1133,51 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     if not call_datetime or not oid:
                         continue
                         
-                    try:
-                        # Parse call datetime
-                        call_dt = None
-                        if 'T' in call_datetime:
-                            call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
-                        else:
-                            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']:
-                                try:
-                                    call_dt = datetime.strptime(call_datetime, fmt)
-                                    break
-                                except:
-                                    continue
-                        
-                        if not call_dt:
-                            log_with_timestamp(f"⚠️ Could not parse datetime: {call_datetime}")
-                            continue
-                        
-                        # Only process calls that are:
-                        # 1. After our start time (Aug 4th 2025 9 AM)
-                        # 2. After our last processed time
-                        # 3. Not already in database
-                        
-                        if call_dt < START_TIME:
-                            continue  # Too old, before our start time
-                            
-                        if call_dt <= last_processed_time:
-                            continue  # Already processed this timeframe
-                        
-                        # Check if already in database
-                        with db_lock:
-                            conn = get_db_connection()
-                            cursor = conn.cursor()
-                            cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
-                            already_exists = cursor.fetchone() is not None
-                            conn.close()
-                        
-                        if already_exists:
-                            log_with_timestamp(f"⏭️ OID {oid} already in database, skipping")
-                            continue
-                        
-                        # This is a new call to process
-                        new_calls.append(comm)
-                        latest_call_time = max(latest_call_time, call_dt)
-                        log_with_timestamp(f"🆕 Found NEW call OID {oid} at {call_dt}")
-
-                    except Exception as e:
-                        log_with_timestamp(f"⚠️ Error processing comm {oid}: {e}")
+                    # Parse call datetime
+                    call_dt = None
+                    if 'T' in call_datetime:
+                        call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+                    else:
+                        for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']:
+                            try:
+                                call_dt = datetime.strptime(call_datetime, fmt)
+                                break
+                            except:
+                                continue
+                    
+                    if not call_dt:
                         continue
+                    
+                    # Only process calls after START_TIME and after last_processed_time
+                    if call_dt < START_TIME or call_dt <= last_processed_time:
+                        continue
+                    
+                    # Check if already in database
+                    with db_lock:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
+                        already_exists = cursor.fetchone() is not None
+                        conn.close()
+                    
+                    if already_exists:
+                        continue
+                    
+                    # This is a new call to process
+                    new_calls.append(comm)
+                    latest_call_time = max(latest_call_time, call_dt)
+                    log_with_timestamp(f"🆕 Found NEW call OID {oid} at {call_dt}")
 
-                if new_calls:
-                    log_with_timestamp(f"🎯 Processing {len(new_calls)} NEW calls")
+                except Exception as e:
+                    log_with_timestamp(f"⚠️ Error processing comm: {e}")
+                    continue
 
-                    # Process new calls (only those with audio will be stored)
+            # Process new calls if found
+            if new_calls:
+                log_with_timestamp(f"🎯 Processing {len(new_calls)} NEW calls")
+
+                # Process calls with threading
+                with ThreadPoolExecutor(max_workers=3) as executor:
                     futures = []
                     for comm in new_calls:
                         futures.append(executor.submit(process_single_call, comm))
@@ -1163,30 +1186,34 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     successfully_processed = 0
                     for future in as_completed(futures):
                         try:
-                            result_oid = future.result()
-                            if result_oid:
+                            result = future.result()
+                            if result:
                                 successfully_processed += 1
-                                log_with_timestamp(f"✅ Successfully processed call with audio: {result_oid}")
+                                log_with_timestamp(f"✅ Successfully processed call with audio: {result}")
                         except Exception as e:
                             log_error("Error processing call", e)
 
                     log_with_timestamp(f"📊 Processed {successfully_processed} calls with audio out of {len(new_calls)} total calls")
-                    
-                    # Update our last processed time
-                    last_processed_time = latest_call_time
-                else:
-                    log_with_timestamp(f"📭 No NEW calls found")
-
-                # Summary stats
-                log_with_timestamp(f"📊 Total Stats - DB Calls: {processing_stats['total_processed']}, Errors: {processing_stats['total_errors']}, Skipped (no audio): {processing_stats['total_skipped']}")
                 
-                # Wait 1 minute before next poll
-                time.sleep(60)
-                
-            except Exception as e:
-                log_error("Error in monitoring loop", e)
-                time.sleep(60)
+                # Update our last processed time ONLY if we found new calls
+                last_processed_time = latest_call_time
+            else:
+                log_with_timestamp(f"📭 No NEW calls found")
 
+            # Summary stats
+            log_with_timestamp(f"📊 Total Stats - DB Calls: {processing_stats['total_processed']}, Errors: {processing_stats['total_errors']}, Skipped (no audio): {processing_stats['total_skipped']}")
+            
+            # Wait 60 seconds before next poll
+            log_with_timestamp("⏰ Waiting 60 seconds before next poll...")
+            time.sleep(60)
+            
+        except Exception as e:
+            log_error("CRITICAL ERROR in monitoring loop", e)
+            log_with_timestamp("🔄 Continuing loop after error, will retry in 60 seconds...")
+            time.sleep(60)
+            continue
+
+    # This should only run if background_process_running is set to False
     background_process_running = False
     log_with_timestamp("🛑 Monitoring stopped")
 
@@ -1356,7 +1383,6 @@ def get_calls_list():
     per_page = request.args.get('per_page', 50, type=int)
     agent_filter = request.args.get('agent', '')
     category_filter = request.args.get('category', '')
-    # Remove audio_filter since ALL calls in DB now have audio
     
     offset = (page - 1) * per_page
     
