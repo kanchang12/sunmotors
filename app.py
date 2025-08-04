@@ -1424,7 +1424,7 @@ def get_calls_list():
                    duration_seconds, status, category, openai_overall_score,
                    openai_engagement, openai_politeness, openai_professionalism, 
                    openai_resolution, summary_translation, transcribed_duration_minutes,
-                   deepgram_cost_gbp, word_count, confidence, processed_at
+                   deepgram_cost_gbp, word_count, confidence, processed_at, transcription_text
             FROM calls 
             {where_clause}
             ORDER BY processed_at DESC 
