@@ -216,6 +216,65 @@ def load_wasteking_session():
         log_error("Failed to load WasteKing session", e)
         return None
 
+def _transcribe_audio(file_path: str) -> Optional[Dict]:
+    """Transcribes an audio file using Deepgram API"""
+    try:
+        log_with_timestamp(f"🎙️ Transcribing {file_path} with Deepgram...")
+        with open(file_path, 'rb') as audio_file:
+            headers = {
+                'Content-Type': 'audio/mpeg',
+                'Authorization': f'Token {DEEPGRAM_API_KEY}'
+            }
+            params = {
+                'model': 'nova-2',
+                'detect_language': True,
+                'punctuate': True,
+                'smart_format': True,
+                'diarize': True
+            }
+            response = requests.post(
+                'https://api.deepgram.com/v1/listen',
+                headers=headers,
+                params=params,
+                data=audio_file
+            )
+            response.raise_for_status()
+            results = response.json()
+            
+            # Extract data from Deepgram response
+            if 'results' in results and 'channels' in results['results'] and results['results']['channels']:
+                channel = results['results']['channels'][0]
+                alternatives = channel.get('alternatives', [{}])
+                if alternatives:
+                    deepgram_transcription = alternatives[0].get('transcript', '')
+                    duration_seconds = results['metadata'].get('duration', 0)
+                    word_count = len(deepgram_transcription.split())
+                    confidence = alternatives[0].get('confidence', 0)
+                    language = results['metadata'].get('language', 'en')
+                    
+                    cost_usd_per_minute = 0.005 # Example cost for nova-2 model
+                    deepgram_cost_usd = (duration_seconds / 60) * cost_usd_per_minute
+                    deepgram_cost_gbp = deepgram_cost_usd * 0.8 # Example conversion rate
+                    
+                    log_with_timestamp("✅ Deepgram transcription successful.")
+                    return {
+                        'transcription_text': deepgram_transcription,
+                        'transcribed_duration_minutes': duration_seconds / 60,
+                        'deepgram_cost_usd': deepgram_cost_usd,
+                        'deepgram_cost_gbp': deepgram_cost_gbp,
+                        'word_count': word_count,
+                        'confidence': confidence,
+                        'language': language
+                    }
+            log_error("Deepgram transcription failed: malformed response", None)
+            return None
+    except requests.exceptions.RequestException as e:
+        log_error("Deepgram transcription failed", e)
+        return None
+    except Exception as e:
+        log_error("Unexpected error in Deepgram transcription", e)
+        return None
+
 def authenticate_wasteking():
     """Authenticate WasteKing using direct API calls (NO BROWSER)"""
     log_with_timestamp("🔐 Starting WasteKing authentication with direct API...")
