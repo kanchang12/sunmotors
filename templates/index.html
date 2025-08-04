@@ -899,59 +899,53 @@
             agent: '',
             category: '',
             per_page: 50,
-            audio_filter: 'with_audio'  // Default to show only calls with audio
+            audio_filter: 'with_audio'
         };
 
-        // Summary Popup Functions
-        function getSummaryCell(summary, transcript, oid, agentName) {
+        // FIXED Summary Popup Functions
+        function getSummaryCell(call) {
+            const summary = call.summary_translation || 'No summary available';
+            const transcript = call.transcription_text || '';
+            const oid = call.oid;
+            const agentName = call.agent_name;
+            
             if (!summary || summary === 'No summary available') {
                 return '<span class="text-muted">No summary</span>';
             }
             
-            const wordCount = summary.split(' ').length;
-            
-            if (wordCount <= 30) {
-                return `<div class="call-summary">${summary}</div>`;
-            } else {
-                const preview = summary.split(' ').slice(0, 15).join(' ') + '...';
-                const safeSummary = summary.replace(/'/g, "&apos;").replace(/"/g, "&quot;");
-                const safeTranscript = transcript ? transcript.replace(/'/g, "&apos;").replace(/"/g, "&quot;") : '';
-                return `
-                    <div>
-                        <div class="call-summary">${preview}</div>
-                        <button class="summary-btn" onclick="showSummaryPopup('${oid}', '${agentName}', '${safeSummary}', '${safeTranscript}')">
-                            See Details
-                        </button>
-                    </div>
-                `;
-            }
+            // Always show button for any summary (testing to make sure it works)
+            const preview = summary.length > 100 ? summary.substring(0, 100) + '...' : summary;
+            return `
+                <div>
+                    <div class="call-summary">${preview}</div>
+                    <button class="summary-btn" data-oid="${oid}" data-agent="${agentName}" data-summary="${encodeURIComponent(summary)}" data-transcript="${encodeURIComponent(transcript)}">
+                        See Details
+                    </button>
+                </div>
+            `;
         }
 
         function showSummaryPopup(oid, agentName, summary, transcript) {
-            // Decode HTML entities back to normal text
-            const decodedSummary = summary.replace(/&apos;/g, "'").replace(/&quot;/g, '"');
-            const decodedTranscript = transcript ? transcript.replace(/&apos;/g, "'").replace(/&quot;/g, '"') : '';
-            
             document.getElementById('summaryPopupTitle').textContent = `Call Details - ${agentName} (${oid})`;
             
             let popupContent = '';
             
             // Add summary section
-            if (decodedSummary && decodedSummary !== 'No summary available') {
+            if (summary && summary !== 'No summary available') {
                 popupContent += `
                     <div class="summary-section">
                         <h6>📝 AI Summary</h6>
-                        <p class="summary-text">${decodedSummary}</p>
+                        <p class="summary-text">${summary}</p>
                     </div>
                 `;
             }
             
             // Add transcript section
-            if (decodedTranscript && decodedTranscript.trim()) {
+            if (transcript && transcript.trim()) {
                 popupContent += `
                     <div class="transcript-section">
                         <h6>🎙️ Full Transcript</h6>
-                        <p class="transcript-text">${decodedTranscript}</p>
+                        <p class="transcript-text">${transcript}</p>
                     </div>
                 `;
             } else {
@@ -1266,10 +1260,22 @@
                         <td><span class="score-badge ${getScoreBadgeClass(call.openai_politeness || 0)}">${(call.openai_politeness || 0).toFixed(1)}</span></td>
                         <td><span class="score-badge ${getScoreBadgeClass(call.openai_professionalism || 0)}">${(call.openai_professionalism || 0).toFixed(1)}</span></td>
                         <td><span class="score-badge ${getScoreBadgeClass(call.openai_resolution || 0)}">${(call.openai_resolution || 0).toFixed(1)}</span></td>
-                        <td>${getSummaryCell(call.summary_translation || 'No summary available', call.transcription_text || '', call.oid, call.agent_name)}</td>
+                        <td>${getSummaryCell(call)}</td>
                     `;
                     tbody.appendChild(row);
                 });
+
+                // FIXED: Add click event listeners to summary buttons
+                document.querySelectorAll('.summary-btn').forEach(button => {
+                    button.addEventListener('click', function() {
+                        const oid = this.getAttribute('data-oid');
+                        const agentName = this.getAttribute('data-agent');
+                        const summary = decodeURIComponent(this.getAttribute('data-summary'));
+                        const transcript = decodeURIComponent(this.getAttribute('data-transcript'));
+                        showSummaryPopup(oid, agentName, summary, transcript);
+                    });
+                });
+
             } catch (error) {
                 console.error('Error updating calls table:', error);
             }
