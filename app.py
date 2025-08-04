@@ -928,9 +928,10 @@ def categorize_call(transcript: str) -> str:
     return "general enquiry"
 
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call - try audio for ALL calls like transcription.py"""
+    """Process single call with proper handling of all scenarios"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
+    status = comm_obj.get('status', '').lower()
     
     if not oid:
         processing_stats['total_skipped'] += 1
@@ -946,63 +947,91 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             return None
         conn.close()
 
-    log_with_timestamp(f"🚀 Processing OID: {oid}")
+    log_with_timestamp(f"🚀 Processing OID: {oid} (Status: {status})")
 
     try:
         raw_data = json.dumps(communication_data)
         xelion_metadata = _extract_agent_info(comm_obj)
         call_datetime = comm_obj.get('date', 'Unknown')
+        duration = xelion_metadata['duration_seconds']
         
-        log_with_timestamp(f"📊 Call - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
-        
-        # TRY AUDIO FOR ALL CALLS - let Xelion API decide what exists
-        log_with_timestamp(f"🎵 Attempting audio download for OID {oid} (ignoring status/duration)")
-        audio_file_path = download_audio(oid)
-        
-        if not audio_file_path:
-            # Store without audio with detailed reason
-            call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
-            
-            # Determine specific reason for no audio
-            if xelion_metadata['status'].lower() in ['missed', 'noanswer']:
-                audio_reason = f"Call was {xelion_metadata['status'].lower()} - no audio recorded"
-            elif xelion_metadata['status'].lower() == 'cancelled':
-                audio_reason = "Call was cancelled before connection - no audio recorded"
-            elif xelion_metadata['duration_seconds'] < 5:
-                audio_reason = f"Call too short ({xelion_metadata['duration_seconds']}s) - no meaningful audio"
-            else:
-                audio_reason = f"Audio file not available from Xelion API (Status: {xelion_metadata['status']}, Duration: {xelion_metadata['duration_seconds']}s)"
+        # Handle different call statuses
+        if status in ['missed', 'noanswer', 'cancelled']:
+            # Store missed/unanswered calls immediately
+            call_category = f"Missed ({status})"
+            processing_error = f"Call was {status}"
             
             with db_lock:
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                try:
-                    cursor.execute('''
-                        INSERT INTO calls (
-                            oid, call_datetime, agent_name, phone_number, call_direction, 
-                            duration_seconds, status, user_id, category, processed_at, 
-                            raw_communication_data, summary_translation, processing_error
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
-                        xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                        xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
-                        raw_data, audio_reason, audio_reason
-                    ))
-                    conn.commit()
-                    processing_stats['total_processed'] += 1
-                    log_with_timestamp(f"✅ Stored OID {oid} without audio")
-                except Exception as e:
-                    log_error(f"Database error storing OID {oid} (No Audio)", e)
-                    processing_stats['total_errors'] += 1
-                finally:
-                    conn.close()
-            return None
+                cursor.execute('''
+                    INSERT INTO calls (
+                        oid, call_datetime, agent_name, phone_number, call_direction, 
+                        duration_seconds, status, user_id, category, processed_at, 
+                        raw_communication_data, summary_translation, processing_error
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                    xelion_metadata['call_direction'], duration, status,
+                    xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
+                    raw_data, processing_error, processing_error
+                ))
+                conn.commit()
+                conn.close()
+            
+            processing_stats['total_processed'] += 1
+            log_with_timestamp(f"✅ Stored missed call OID {oid}")
+            return oid
 
-        # Transcribe Audio using WORKING pattern
+        # For answered calls, check if audio is available
+        log_with_timestamp(f"🎵 Attempting audio download for OID {oid}")
+        audio_file_path = download_audio(oid)
+        
+        if not audio_file_path:
+            # Determine why audio isn't available
+            try:
+                call_time = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+                call_age = datetime.now() - call_time
+                
+                if call_age < timedelta(minutes=2):
+                    # Very recent call - likely still in progress
+                    log_with_timestamp(f"⏳ Skipping OID {oid} - call still in progress (ended {call_age} ago)")
+                    return None
+                else:
+                    # Older call with no audio - mark accordingly
+                    call_category = "No Audio Available"
+                    processing_error = f"Call completed {call_age} ago but no audio available"
+            except:
+                call_category = "No Audio Available"
+                processing_error = "Audio download failed"
+
+            # Store call with no audio
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO calls (
+                        oid, call_datetime, agent_name, phone_number, call_direction, 
+                        duration_seconds, status, user_id, category, processed_at, 
+                        raw_communication_data, summary_translation, processing_error
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                    xelion_metadata['call_direction'], duration, status,
+                    xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
+                    raw_data, processing_error, processing_error
+                ))
+                conn.commit()
+                conn.close()
+            
+            processing_stats['total_processed'] += 1
+            log_with_timestamp(f"✅ Stored OID {oid} with no audio")
+            return oid
+
+        # Audio available - process transcription
         transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
         
-        # Delete Audio File
+        # Clean up audio file
         try:
             os.remove(audio_file_path)
             log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
@@ -1010,32 +1039,29 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             log_error(f"Error deleting audio file", e)
 
         if not transcription_result:
-            processing_stats['total_errors'] += 1
-            # Store with transcription failure
+            # Store failed transcription
             with db_lock:
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                try:
-                    cursor.execute('''
-                        INSERT INTO calls (
-                            oid, call_datetime, agent_name, phone_number, call_direction, 
-                            duration_seconds, status, user_id, category, processed_at, 
-                            raw_communication_data, summary_translation, processing_error
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
-                        xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                        xelion_metadata['user_id'], "Transcription Failed", datetime.now().isoformat(), 
-                        raw_data, "Transcription failed", "Deepgram transcription failed"
-                    ))
-                    conn.commit()
-                    processing_stats['total_processed'] += 1
-                    log_with_timestamp(f"✅ Stored OID {oid} with transcription failure")
-                except Exception as e:
-                    log_error(f"Database error storing OID {oid} (Transcription Failed)", e)
-                finally:
-                    conn.close()
-            return None
+                cursor.execute('''
+                    INSERT INTO calls (
+                        oid, call_datetime, agent_name, phone_number, call_direction, 
+                        duration_seconds, status, user_id, category, processed_at, 
+                        raw_communication_data, summary_translation, processing_error
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                    xelion_metadata['call_direction'], duration, status,
+                    xelion_metadata['user_id'], "Transcription Failed", datetime.now().isoformat(), 
+                    raw_data, "Transcription failed", "Deepgram transcription failed"
+                ))
+                conn.commit()
+                conn.close()
+            
+            processing_stats['total_processed'] += 1
+            processing_stats['total_errors'] += 1
+            log_with_timestamp(f"⚠️ Stored OID {oid} with transcription failure")
+            return oid
 
         # Analyze with OpenAI
         openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
@@ -1049,116 +1075,88 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                 "summary": "OpenAI analysis failed"
             }
 
-        # Categorize Call
+        # Categorize call
         call_category = categorize_call(transcription_result['transcription_text'])
         
-        # Store in Database using WORKING pattern
+        # Store complete call data
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO calls (
-                        oid, call_datetime, agent_name, phone_number, call_direction, 
-                        duration_seconds, status, user_id, transcription_text, 
-                        transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
-                        word_count, confidence, language, processed_at, category,
-                        openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score,
-                        engagement_sub1, engagement_sub2, engagement_sub3, engagement_sub4,
-                        politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
-                        professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
-                        resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
-                        raw_communication_data, summary_translation
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
-                    xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                    xelion_metadata['user_id'], transcription_result['transcription_text'],
-                    transcription_result['transcribed_duration_minutes'], transcription_result['deepgram_cost_usd'],
-                    transcription_result['deepgram_cost_gbp'], transcription_result['word_count'],
-                    transcription_result['confidence'], transcription_result['language'], datetime.now().isoformat(),
-                    call_category, openai_analysis.get('customer_engagement', {}).get('score', 0),
-                    openai_analysis.get('politeness', {}).get('score', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('score', 0),
-                    openai_analysis.get('customer_resolution', {}).get('score', 0),
-                    openai_analysis.get('overall_score', 0),
-                    openai_analysis.get('customer_engagement', {}).get('active_listening', 0),
-                    openai_analysis.get('customer_engagement', {}).get('probing_questions', 0),
-                    openai_analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
-                    openai_analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
-                    openai_analysis.get('politeness', {}).get('greeting_closing', 0),
-                    openai_analysis.get('politeness', {}).get('tone_demeanor', 0),
-                    openai_analysis.get('politeness', {}).get('respectful_language', 0),
-                    openai_analysis.get('politeness', {}).get('handling_interruptions', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('product_service_info', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('solution_offering', 0),
-                    openai_analysis.get('customer_resolution', {}).get('issue_identification', 0),
-                    openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
-                    openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
-                    openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
-                    raw_data, openai_analysis.get('summary', 'No summary')
-                ))
-                conn.commit()
-                log_with_timestamp(f"✅ Successfully stored OID {oid} with transcription")
-                processing_stats['total_processed'] += 1
-                return oid
-            except Exception as e:
-                log_error(f"Database error storing OID {oid}", e)
-                processing_stats['total_errors'] += 1
-                return None
-            finally:
-                conn.close()
-                
+            cursor.execute('''
+                INSERT INTO calls (
+                    oid, call_datetime, agent_name, phone_number, call_direction, 
+                    duration_seconds, status, user_id, transcription_text, 
+                    transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
+                    word_count, confidence, language, processed_at, category,
+                    openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score,
+                    engagement_sub1, engagement_sub2, engagement_sub3, engagement_sub4,
+                    politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
+                    professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
+                    resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
+                    raw_communication_data, summary_translation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                xelion_metadata['call_direction'], duration, status,
+                xelion_metadata['user_id'], transcription_result['transcription_text'],
+                transcription_result['transcribed_duration_minutes'], transcription_result['deepgram_cost_usd'],
+                transcription_result['deepgram_cost_gbp'], transcription_result['word_count'],
+                transcription_result['confidence'], transcription_result['language'], datetime.now().isoformat(),
+                call_category, openai_analysis.get('customer_engagement', {}).get('score', 0),
+                openai_analysis.get('politeness', {}).get('score', 0),
+                openai_analysis.get('professional_knowledge', {}).get('score', 0),
+                openai_analysis.get('customer_resolution', {}).get('score', 0),
+                openai_analysis.get('overall_score', 0),
+                openai_analysis.get('customer_engagement', {}).get('active_listening', 0),
+                openai_analysis.get('customer_engagement', {}).get('probing_questions', 0),
+                openai_analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
+                openai_analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
+                openai_analysis.get('politeness', {}).get('greeting_closing', 0),
+                openai_analysis.get('politeness', {}).get('tone_demeanor', 0),
+                openai_analysis.get('politeness', {}).get('respectful_language', 0),
+                openai_analysis.get('politeness', {}).get('handling_interruptions', 0),
+                openai_analysis.get('professional_knowledge', {}).get('product_service_info', 0),
+                openai_analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
+                openai_analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
+                openai_analysis.get('professional_knowledge', {}).get('solution_offering', 0),
+                openai_analysis.get('customer_resolution', {}).get('issue_identification', 0),
+                openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
+                openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
+                openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                raw_data, openai_analysis.get('summary', 'No summary')
+            ))
+            conn.commit()
+            conn.close()
+        
+        processing_stats['total_processed'] += 1
+        log_with_timestamp(f"✅ Successfully stored OID {oid} with transcription")
+        return oid
+        
     except Exception as e:
         log_error(f"Unexpected error processing OID {oid}", e)
         processing_stats['total_errors'] += 1
         return None
 
 def fetch_and_transcribe_recent_calls():
-    """Monitor for NEW calls only"""
+    """Monitor for calls - process missed or completed answered calls"""
     global background_process_running
     background_process_running = True
     
-    log_with_timestamp("🚀 Starting NEW calls monitoring...")
+    log_with_timestamp("🚀 Starting call monitoring (missed & completed calls only)...")
     
     if not xelion_login():
         log_error("Xelion login failed")
         background_process_running = False
         return
 
-    # Get last processed call timestamp - WITH BUFFER
-    last_call_time = None
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(call_datetime) FROM calls WHERE call_datetime IS NOT NULL")
-        result = cursor.fetchone()[0]
-        if result:
-            try:
-                last_call_time = datetime.fromisoformat(result.replace('Z', '+00:00'))
-                log_with_timestamp(f"📞 Last processed call: {last_call_time}")
-            except:
-                pass
-        conn.close()
-
-    # Start checking from appropriate time - WITH BUFFER
-    if not last_call_time:
-        check_since = datetime.now() - timedelta(minutes=30)  # Increased buffer
-        log_with_timestamp("🆕 No previous calls - checking last 30 minutes")
-    else:
-        # IMPORTANT FIX: Add 2-minute buffer to catch any missed calls
-        check_since = last_call_time - timedelta(minutes=2)
-        log_with_timestamp(f"🔍 Checking for NEW calls since: {check_since} (with 2min buffer)")
-
-    processed_this_session = set()
+    processed_oids = set()
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         while background_process_running:
             try:
-                log_with_timestamp(f"🔄 Polling for NEW calls since {check_since.strftime('%Y-%m-%d %H:%M:%S')}")
+                log_with_timestamp("🔄 Polling for recent calls...")
                 
+                # Fetch recent communications
                 comms, _ = _fetch_communications_page(limit=50, until_date=datetime.now())
                 
                 if not comms:
@@ -1166,64 +1164,49 @@ def fetch_and_transcribe_recent_calls():
                     time.sleep(30)
                     continue
                 
-                # Filter to NEW calls only - IMPROVED LOGIC
+                # Process calls in this batch
                 new_comms = []
-                latest_time = check_since
-                
-                log_with_timestamp(f"🔍 Examining {len(comms)} communications for new calls...")
                 
                 for comm in comms:
                     comm_obj = comm.get('object', {})
-                    call_datetime = comm_obj.get('date', '')
                     oid = comm_obj.get('oid')
+                    status = comm_obj.get('status', '').lower()
                     
-                    if not call_datetime or not oid:
+                    if not oid:
                         continue
                         
-                    try:
-                        # Parse datetime with better error handling
-                        call_dt = None
-                        if 'T' in call_datetime:
-                            call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
-                        else:
-                            # Try different datetime formats
-                            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']:
-                                try:
-                                    call_dt = datetime.strptime(call_datetime, fmt)
-                                    break
-                                except:
-                                    continue
+                    # Skip if already processed
+                    if oid in processed_oids:
+                        continue
                         
-                        if not call_dt:
-                            log_with_timestamp(f"⚠️ Could not parse datetime: {call_datetime}")
-                            continue
-                        
-                        # Check if already processed in database
-                        with db_lock:
-                            conn = get_db_connection()
-                            cursor = conn.cursor()
-                            cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
-                            already_exists = cursor.fetchone() is not None
-                            conn.close()
-                        
-                        # IMPROVED LOGIC: Process if call is newer than check_since AND not already in DB
-                        if call_dt > check_since and not already_exists and oid not in processed_this_session:
-                            new_comms.append(comm)
-                            processed_this_session.add(oid)
-                            latest_time = max(latest_time, call_dt)
-                            log_with_timestamp(f"🆕 Found NEW call OID {oid} at {call_dt}")
+                    # Check if already in database
+                    with db_lock:
+                        conn = get_db_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
+                        already_exists = cursor.fetchone() is not None
+                        conn.close()
+                    
+                    if already_exists:
+                        processed_oids.add(oid)
+                        continue
 
-                        elif call_dt <= check_since:
-                            log_with_timestamp(f"⏭️ Skipping OID {oid} - too old ({call_dt} <= {check_since})")
-                            
-                    except Exception as e:
-                        log_with_timestamp(f"⚠️ Error processing comm {oid}: {e}")
+                    # Always process missed/unanswered calls immediately
+                    if status in ['missed', 'noanswer', 'cancelled']:
+                        new_comms.append(comm)
+                        processed_oids.add(oid)
+                        log_with_timestamp(f"🆕 Found missed call OID {oid} (status: {status})")
                         continue
+                        
+                    # For answered calls, we'll check audio availability in process_single_call
+                    new_comms.append(comm)
+                    processed_oids.add(oid)
+                    log_with_timestamp(f"🆕 Found call OID {oid} to process")
 
                 if new_comms:
-                    log_with_timestamp(f"🎯 Processing {len(new_comms)} NEW calls")
-
-                    # Process NEW calls
+                    log_with_timestamp(f"🎯 Processing {len(new_comms)} calls")
+                    
+                    # Process calls
                     futures = []
                     for comm in new_comms:
                         futures.append(executor.submit(process_single_call, comm))
@@ -1233,14 +1216,11 @@ def fetch_and_transcribe_recent_calls():
                         try:
                             result_oid = future.result()
                             if result_oid:
-                                log_with_timestamp(f"✅ Processed NEW call: {result_oid}")
+                                log_with_timestamp(f"✅ Processed call: {result_oid}")
                         except Exception as e:
                             log_error("Error processing call", e)
-
-                    # Update check time - but keep the buffer
-                    check_since = latest_time - timedelta(minutes=1)  # Keep 1min buffer
                 else:
-                    log_with_timestamp(f"📭 No NEW calls found (examined {len(comms)} communications)")
+                    log_with_timestamp(f"📭 No new calls found (examined {len(comms)} communications)")
 
                 log_with_timestamp(f"📊 Stats - Processed: {processing_stats['total_processed']}, Errors: {processing_stats['total_errors']}")
                 time.sleep(30)
