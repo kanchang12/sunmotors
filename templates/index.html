@@ -19,6 +19,141 @@
             min-height: 100vh;
             padding: 20px;
         }
+
+        /* Gauges Container Styles */
+.gauges-container {
+    padding: 20px 0;
+}
+
+.gauge-wrapper {
+    background: linear-gradient(145deg, #ffffff, #f0f2f5);
+    border-radius: 16px;
+    padding: 20px;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.gauge-wrapper:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.15);
+}
+
+.gauge-container {
+    width: 140px;
+    height: 140px;
+    margin: 0 auto 10px;
+    position: relative;
+}
+
+.gauge-label {
+    position: absolute;
+    bottom: 15px;
+    width: 100%;
+    text-align: center;
+    font-weight: bold;
+    color: #495057;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.gauge-count {
+    display: block;
+    margin-top: 8px;
+    color: #6c757d;
+    font-weight: 500;
+    font-size: 0.85rem;
+}
+
+/* Performance Section Styles */
+.performance-section {
+    padding: 10px 0;
+}
+
+.performance-category {
+    margin-bottom: 25px;
+    padding: 20px;
+    background: linear-gradient(145deg, #f8f9fa, #ffffff);
+    border-radius: 12px;
+    border-left: 4px solid #667eea;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
+}
+
+.performance-category:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.performance-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.performance-title {
+    font-weight: 600;
+    color: #495057;
+    font-size: 1.1rem;
+    flex-grow: 1;
+}
+
+.performance-max {
+    color: #6c757d;
+    font-size: 0.9rem;
+    margin-left: 2px;
+}
+
+.performance-metrics {
+    display: grid;
+    gap: 8px;
+}
+
+.metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: #ffffff;
+    border-radius: 8px;
+    border-left: 3px solid #28a745;
+    transition: all 0.2s ease;
+}
+
+.metric-item:hover {
+    background-color: #f8f9fa;
+    transform: translateX(3px);
+}
+
+.metric-label {
+    font-size: 0.9rem;
+    color: #495057;
+    font-weight: 500;
+}
+
+.metric-score {
+    font-weight: 600;
+    color: #667eea;
+    font-size: 0.95rem;
+    background: linear-gradient(45deg, #667eea, #764ba2);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .gauge-container {
+        width: 120px;
+        height: 120px;
+    }
         .header {
             text-align: center;
             margin-bottom: 40px;
@@ -335,44 +470,63 @@
                     <div class="stats-item">Total Transcribed Duration: <strong id="totalDuration">0.00 mins</strong></div>
                 </div>
             </div>
-            <div class="col-md-8">
+<div class="col-md-8">
                 <div class="card">
-                    <h5 class="card-title">📈 Average Call Category Ratings (Overall Score)</h5>
-                    <div class="row text-center">
-                        <div class="col-md-3">
-                            <div class="gauge-container">
-                                <canvas id="skipGauge"></canvas>
-                                <div class="gauge-label">SKIP</div>
+                    <h5 class="card-title">📈 Call Category Performance Overview</h5>
+                    <p class="text-muted mb-3" style="font-size: 0.9rem;">Overall scores by call type - hover for details</p>
+                    
+                    <div class="gauges-container">
+                        <!-- Top Row - 3 Main Categories -->
+                        <div class="row text-center mb-4">
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="generalEnquiryGauge"></canvas>
+                                        <div class="gauge-label">General Enquiry</div>
+                                    </div>
+                                    <small id="generalEnquiryCount" class="gauge-count">(0 calls)</small>
+                                </div>
                             </div>
-                            <small id="skipCount">(0 calls)</small>
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="manInVanGauge"></canvas>
+                                        <div class="gauge-label">Man in Van</div>
+                                    </div>
+                                    <small id="manInVanCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="complaintGauge"></canvas>
+                                        <div class="gauge-label">Complaint</div>
+                                    </div>
+                                    <small id="complaintCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
                         </div>
-                        <div class="col-md-3">
-                            <div class="gauge-container">
-                                <canvas id="manInVanGauge"></canvas>
-                                <div class="gauge-label">Man in Van</div>
+                        
+                        <!-- Bottom Row - 2 Special Categories -->
+                        <div class="row text-center justify-content-center">
+                            <div class="col-lg-3 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="skipGauge"></canvas>
+                                        <div class="gauge-label">SKIP</div>
+                                    </div>
+                                    <small id="skipCount" class="gauge-count">(0 calls)</small>
+                                </div>
                             </div>
-                            <small id="manInVanCount">(0 calls)</small>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="gauge-container">
-                                <canvas id="generalEnquiryGauge"></canvas>
-                                <div class="gauge-label">General Enquiry</div>
+                            <div class="col-lg-3 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="missedNoAudioGauge"></canvas>
+                                        <div class="gauge-label">Missed/No Audio</div>
+                                    </div>
+                                    <small id="missedNoAudioCount" class="gauge-count">(0 calls)</small>
+                                </div>
                             </div>
-                            <small id="generalEnquiryCount">(0 calls)</small>
-                        </div>
-                        <div class="col-md-3">
-                            <div class="gauge-container">
-                                <canvas id="complaintGauge"></canvas>
-                                <div class="gauge-label">Complaint</div>
-                            </div>
-                            <small id="complaintCount">(0 calls)</small>
-                        </div>
-                         <div class="col-md-3 mt-3">
-                            <div class="gauge-container">
-                                <canvas id="missedNoAudioGauge"></canvas>
-                                <div class="gauge-label">Missed/No Audio</div>
-                            </div>
-                            <small id="missedNoAudioCount">(0 calls)</small>
                         </div>
                     </div>
                 </div>
@@ -382,56 +536,121 @@
         <div class="row">
             <div class="col-md-6">
                 <div class="card">
-                    <h5 class="card-title">🎯 Average Agent Performance Ratings</h5>
-                    <ul class="list-group list-group-flush">
-                        <li class="list-group-item" style="background-color: transparent; border: none;">
-                            Customer Engagement: <span class="category-score" id="avgEngagement">0.00</span> / 10
-                            <ul class="sub-category-list">
-                                <li><strong>Active Listening:</strong> <span id="subEngagement1">0.00</span></li>
-                                <li><strong>Probing Questions:</strong> <span id="subEngagement2">0.00</span></li>
-                                <li><strong>Empathy & Understanding:</strong> <span id="subEngagement3">0.00</span></li>
-                                <li><strong>Clarity & Conciseness:</strong> <span id="subEngagement4">0.00</span></li>
-                            </ul>
-                        </li>
-                        <li class="list-group-item" style="background-color: transparent; border: none;">
-                            Politeness: <span class="category-score" id="avgPoliteness">0.00</span> / 10
-                            <ul class="sub-category-list">
-                                <li><strong>Greeting & Closing:</strong> <span id="subPoliteness1">0.00</span></li>
-                                <li><strong>Tone & Demeanor:</strong> <span id="subPoliteness2">0.00</span></li>
-                                <li><strong>Respectful Language:</strong> <span id="subPoliteness3">0.00</span></li>
-                                <li><strong>Handling Interruptions:</strong> <span id="subPoliteness4">0.00</span></li>
-                            </ul>
-                        </li>
-                    </ul>
+                    <h5 class="card-title">🎯 Customer Service Performance</h5>
+                    <div class="performance-section">
+                        <div class="performance-category">
+                            <div class="performance-header">
+                                <span class="performance-title">Customer Engagement</span>
+                                <span class="category-score" id="avgEngagement">0.00</span>
+                                <span class="performance-max">/ 10</span>
+                            </div>
+                            <div class="performance-metrics">
+                                <div class="metric-item">
+                                    <span class="metric-label">Active Listening</span>
+                                    <span class="metric-score" id="subEngagement1">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Probing Questions</span>
+                                    <span class="metric-score" id="subEngagement2">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Empathy & Understanding</span>
+                                    <span class="metric-score" id="subEngagement3">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Clarity & Conciseness</span>
+                                    <span class="metric-score" id="subEngagement4">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="performance-category">
+                            <div class="performance-header">
+                                <span class="performance-title">Politeness</span>
+                                <span class="category-score" id="avgPoliteness">0.00</span>
+                                <span class="performance-max">/ 10</span>
+                            </div>
+                            <div class="performance-metrics">
+                                <div class="metric-item">
+                                    <span class="metric-label">Greeting & Closing</span>
+                                    <span class="metric-score" id="subPoliteness1">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Tone & Demeanor</span>
+                                    <span class="metric-score" id="subPoliteness2">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Respectful Language</span>
+                                    <span class="metric-score" id="subPoliteness3">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Handling Interruptions</span>
+                                    <span class="metric-score" id="subPoliteness4">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="col-md-6">
                 <div class="card">
-                    <h5 class="card-title">💼 Average Agent Performance Ratings (Cont.)</h5>
-                    <ul class="list-group list-group-flush">
-                        <li class="list-group-item" style="background-color: transparent; border: none;">
-                            Professional Knowledge: <span class="category-score" id="avgProfessionalism">0.00</span> / 10
-                            <ul class="sub-category-list">
-                                <li><strong>Product/Service Information:</strong> <span id="subProfessionalism1">0.00</span></li>
-                                <li><strong>Policy Adherence:</strong> <span id="subProfessionalism2">0.00</span></li>
-                                <li><strong>Problem Diagnosis:</strong> <span id="subProfessionalism3">0.00</span></li>
-                                <li><strong>Solution Offering:</strong> <span id="subProfessionalism4">0.00</span></li>
-                            </ul>
-                        </li>
-                        <li class="list-group-item" style="background-color: transparent; border: none;">
-                            Customer Resolution: <span class="category-score" id="avgResolution">0.00</span> / 10
-                            <ul class="sub-category-list">
-                                <li><strong>Issue Identification:</strong> <span id="subResolution1">0.00</span></li>
-                                <li><strong>Solution Effectiveness:</strong> <span id="subResolution2">0.00</span></li>
-                                <li><strong>Time to Resolution:</strong> <span id="subResolution3">0.00</span></li>
-                                <li><strong>Follow-up & Next Steps:</strong> <span id="subResolution4">0.00</span></li>
-                            </ul>
-                        </li>
-                    </ul>
+                    <h5 class="card-title">💼 Professional Excellence</h5>
+                    <div class="performance-section">
+                        <div class="performance-category">
+                            <div class="performance-header">
+                                <span class="performance-title">Professional Knowledge</span>
+                                <span class="category-score" id="avgProfessionalism">0.00</span>
+                                <span class="performance-max">/ 10</span>
+                            </div>
+                            <div class="performance-metrics">
+                                <div class="metric-item">
+                                    <span class="metric-label">Product/Service Information</span>
+                                    <span class="metric-score" id="subProfessionalism1">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Policy Adherence</span>
+                                    <span class="metric-score" id="subProfessionalism2">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Problem Diagnosis</span>
+                                    <span class="metric-score" id="subProfessionalism3">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Solution Offering</span>
+                                    <span class="metric-score" id="subProfessionalism4">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="performance-category">
+                            <div class="performance-header">
+                                <span class="performance-title">Customer Resolution</span>
+                                <span class="category-score" id="avgResolution">0.00</span>
+                                <span class="performance-max">/ 10</span>
+                            </div>
+                            <div class="performance-metrics">
+                                <div class="metric-item">
+                                    <span class="metric-label">Issue Identification</span>
+                                    <span class="metric-score" id="subResolution1">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Solution Effectiveness</span>
+                                    <span class="metric-score" id="subResolution2">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Time to Resolution</span>
+                                    <span class="metric-score" id="subResolution3">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Follow-up & Next Steps</span>
+                                    <span class="metric-score" id="subResolution4">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-
         <!-- Calls List Section -->
         <div class="calls-section">
             <div class="card">
