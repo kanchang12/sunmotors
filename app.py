@@ -932,7 +932,7 @@ def categorize_call(transcript: str) -> str:
 
 def process_single_call(communication_data: Dict) -> Optional[str]:
     """
-    Process a single call. This function is modified to re-attempt audio downloads
+    Processes a single call. This function is modified to re-attempt audio downloads
     for calls already in the database that were initially logged without audio.
     """
     comm_obj = communication_data.get('object', {})
@@ -942,22 +942,22 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         processing_stats['total_skipped'] += 1
         return None
 
-    # Check if the call already exists in the database and get its summary_translation
+    # Check if the call already exists and its summary
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT summary_translation FROM calls WHERE oid = ?", (oid,))
         existing_call_record = cursor.fetchone()
         conn.close()
-
-    # Logic to skip already processed calls
+    
+    # If the call exists and was processed with audio, skip it
     if existing_call_record and existing_call_record['summary_translation'] != "No audio available":
         log_with_timestamp(f"⏭️ Skipping OID {oid} - already processed with audio")
         processing_stats['total_skipped'] += 1
         return None
 
     log_with_timestamp(f"🚀 Processing OID: {oid}")
-
+    
     try:
         raw_data = json.dumps(communication_data)
         xelion_metadata = _extract_agent_info(comm_obj)
@@ -973,14 +973,14 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             # If no audio is found and it's a NEW call, insert a 'no audio' record
             if not existing_call_record:
                 call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
-                audio_reason = "Audio file not available from Xelion API" # Fallback reason
+                audio_reason = "Audio file not available from Xelion API"
                 if xelion_metadata['status'].lower() in ['missed', 'noanswer']:
                     audio_reason = f"Call was {xelion_metadata['status'].lower()} - no audio recorded"
                 elif xelion_metadata['status'].lower() == 'cancelled':
                     audio_reason = "Call was cancelled before connection - no audio recorded"
                 elif xelion_metadata['duration_seconds'] < 5:
                     audio_reason = f"Call too short ({xelion_metadata['duration_seconds']}s) - no meaningful audio"
-                    
+                
                 with db_lock:
                     conn = get_db_connection()
                     cursor = conn.cursor()
@@ -1011,9 +1011,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
 
         # --- If audio is found, proceed with the full pipeline ---
         log_with_timestamp(f"🎵 Downloaded audio for OID {oid}")
-        
-        # Transcribe Audio
-        transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
+        transcription_result = _transcribe_audio(audio_file_path)
         
         # Delete Audio File
         try:
@@ -1025,7 +1023,6 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         # Handle transcription failure
         if not transcription_result:
             processing_stats['total_errors'] += 1
-            # Update an existing 'no audio' record or insert a new 'failed transcription' record
             with db_lock:
                 conn = get_db_connection()
                 cursor = conn.cursor()
@@ -1040,7 +1037,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                         ''', (datetime.now().isoformat(), oid))
                         log_with_timestamp(f"🔁 Updated OID {oid} with transcription failure")
                     else:
-                         cursor.execute('''
+                        cursor.execute('''
                             INSERT INTO calls (
                                 oid, call_datetime, agent_name, phone_number, call_direction, 
                                 duration_seconds, status, user_id, category, processed_at, 
@@ -1053,6 +1050,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                             raw_data, "Transcription failed", "Deepgram transcription failed"
                         ))
                     conn.commit()
+                    log_with_timestamp(f"✅ Stored OID {oid} with transcription failure")
                     processing_stats['total_processed'] += 1
                 except Exception as e:
                     log_error(f"Database error handling transcription failure for OID {oid}", e)
@@ -1062,10 +1060,16 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             return None
 
         # Analyze with OpenAI
-        openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
+        openai_analysis = _analyze_text(transcription_result['transcription_text'], oid)
         if not openai_analysis:
-            # Simplified for brevity, your code should have the full dictionary
-            openai_analysis = {"summary": "OpenAI analysis failed", "overall_score": 0}
+            openai_analysis = {
+                "customer_engagement": {"score": 0, "active_listening": 0, "probing_questions": 0, "empathy_understanding": 0, "clarity_conciseness": 0},
+                "politeness": {"score": 0, "greeting_closing": 0, "tone_demeanor": 0, "respectful_language": 0, "handling_interruptions": 0},
+                "professional_knowledge": {"score": 0, "product_service_info": 0, "policy_adherence": 0, "problem_diagnosis": 0, "solution_offering": 0},
+                "customer_resolution": {"score": 0, "issue_identification": 0, "solution_effectiveness": 0, "time_to_resolution": 0, "follow_up_next_steps": 0},
+                "overall_score": 0,
+                "summary": "OpenAI analysis failed"
+            }
 
         # Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
