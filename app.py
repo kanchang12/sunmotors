@@ -1390,6 +1390,7 @@ def get_calls_list():
     per_page = request.args.get('per_page', 50, type=int)
     agent_filter = request.args.get('agent', '')
     category_filter = request.args.get('category', '')
+    audio_filter = request.args.get('audio_filter', 'with_audio')  # Default to with_audio
     
     offset = (page - 1) * per_page
     
@@ -1400,6 +1401,11 @@ def get_calls_list():
         # Build query with filters
         where_conditions = []
         params = []
+        
+        # Audio filter (default is with_audio)
+        if audio_filter == 'with_audio':
+            where_conditions.append("transcription_text IS NOT NULL AND transcription_text != ''")
+        # If audio_filter == 'all', don't add any condition (show all calls)
         
         if agent_filter:
             where_conditions.append("agent_name LIKE ?")
