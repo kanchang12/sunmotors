@@ -7,10 +7,14 @@ import threading
 import time
 import traceback
 import pickle
+import smtplib
+import uuid
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import re
 from bs4 import BeautifulSoup
 
@@ -1056,29 +1060,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         processing_stats['total_errors'] += 1
         return None
 
-def fetch_and_transcribe_recent_calls():
-    """COMPLETELY REWRITTEN - Simple monitoring from Aug 4th 2025 9AM onwards"""
-    global background_process_running
-    background_process_running = True
-    
-    # FIXED START TIME: August 4th 2025 9:00 AM
-    START_TIME = datetime(2025, 8, 4, 9, 0, 0)
-    
-    log_with_timestamp(f"🚀 Starting AUDIO-ONLY call monitoring from {START_TIME.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    if not xelion_login():
-        log_error("Xelion login failed")
-        background_process_running = False
-        return
-
-    # Get the latest call datetime from database to continue from where we left off
-    last_processed_time = START_TIME
-    with db_lock:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT MAX(call_datetime) FROM calls WHERE call_datetime IS NOT NULL")
-        result = cursor.fetchone()[0]
-        if result:
+ result:
             try:
                 db_time = datetime.fromisoformat(result.replace('Z', '+00:00'))
                 if db_time > START_TIME:
