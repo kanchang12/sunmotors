@@ -763,7 +763,7 @@ def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optio
         file_size = os.path.getsize(audio_file_path)
         log_with_timestamp(f"🎵 Transcribing audio file: {file_size} bytes")
         
-        if file_size < 1000:
+        if file_size < 10:
             log_error(f"Audio file too small: {file_size} bytes")
             return None
         
