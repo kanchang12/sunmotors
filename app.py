@@ -1456,7 +1456,7 @@ def get_calls_list():
         cursor.execute(count_query, params)
         total_calls = cursor.fetchone()[0]
         
-        # Get calls
+        # Get calls - MUST include transcription_text for popup
         query = f"""
             SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
                    duration_seconds, status, category, openai_overall_score,
