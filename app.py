@@ -219,10 +219,15 @@ def load_wasteking_session():
 def _transcribe_audio(file_path: str) -> Optional[Dict]:
     """Transcribes an audio file using Deepgram API"""
     try:
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+            log_error(f"Audio file not found or is empty: {file_path}", None)
+            return None
+
         log_with_timestamp(f"🎙️ Transcribing {file_path} with Deepgram...")
+
         with open(file_path, 'rb') as audio_file:
             headers = {
-                'Authorization': f'Token {DEEPGRAM_API_KEY}'
+                'Authorization': f'Token {DEEPGRAM_API_KEY}',
             }
             params = {
                 'model': 'nova-2',
@@ -231,9 +236,12 @@ def _transcribe_audio(file_path: str) -> Optional[Dict]:
                 'smart_format': True,
                 'diarize': True
             }
+            # Use files parameter to let 'requests' handle multipart/form-data
+            # This is the most reliable method for file uploads
             files = {
-                'file': ('audio.mp3', audio_file, 'audio/mpeg')
+                'file': audio_file
             }
+            
             response = requests.post(
                 'https://api.deepgram.com/v1/listen',
                 headers=headers,
