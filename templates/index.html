@@ -45,48 +45,21 @@
 
 .gauge-container {
     width: 140px;
-    height: 180px; /* Increased height to accommodate label */
-    margin: 0 auto 10px;
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.gauge-chart-area {
-    width: 140px;
     height: 140px;
+    margin: 0 auto 10px;
     position: relative;
 }
 
 .gauge-label {
-    position: relative; /* Changed from absolute */
-    bottom: auto; /* Remove absolute positioning */
+    position: absolute;
+    bottom: 15px;
     width: 100%;
     text-align: center;
     font-weight: bold;
     color: #495057;
-    font-size: 0.85rem;
+    font-size: 0.9rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-top: 15px; /* Add space between chart and label */
-    line-height: 1.2;
-    padding: 0 5px; /* Add some padding */
-}
-
-.gauge-wrapper {
-    background: linear-gradient(145deg, #ffffff, #f0f2f5);
-    border-radius: 16px;
-    padding: 25px 15px; /* Increased top/bottom padding */
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-    transition: all 0.3s ease;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 250px; /* Ensure minimum height */
 }
 
 .gauge-count {
@@ -506,60 +479,31 @@
                         <!-- Top Row - 3 Main Categories -->
                         <div class="row text-center mb-4">
                             <div class="col-lg-4 col-md-6 mb-3">
-<!-- General Enquiry -->
-<div class="gauge-wrapper">
-    <div class="gauge-container">
-        <div class="gauge-chart-area">
-            <canvas id="generalEnquiryGauge"></canvas>
-        </div>
-        <div class="gauge-label">General Enquiry</div>
-    </div>
-    <small id="generalEnquiryCount" class="gauge-count">(0 calls)</small>
-</div>
-
-<!-- Man in Van -->
-<div class="gauge-wrapper">
-    <div class="gauge-container">
-        <div class="gauge-chart-area">
-            <canvas id="manInVanGauge"></canvas>
-        </div>
-        <div class="gauge-label">Man in Van</div>
-    </div>
-    <small id="manInVanCount" class="gauge-count">(0 calls)</small>
-</div>
-
-<!-- Complaint -->
-<div class="gauge-wrapper">
-    <div class="gauge-container">
-        <div class="gauge-chart-area">
-            <canvas id="complaintGauge"></canvas>
-        </div>
-        <div class="gauge-label">Complaint</div>
-    </div>
-    <small id="complaintCount" class="gauge-count">(0 calls)</small>
-</div>
-
-<!-- Skip -->
-<div class="gauge-wrapper">
-    <div class="gauge-container">
-        <div class="gauge-chart-area">
-            <canvas id="skipGauge"></canvas>
-        </div>
-        <div class="gauge-label">SKIP</div>
-    </div>
-    <small id="skipCount" class="gauge-count">(0 calls)</small>
-</div>
-
-<!-- Missed/No Audio -->
-<div class="gauge-wrapper">
-    <div class="gauge-container">
-        <div class="gauge-chart-area">
-            <canvas id="missedNoAudioGauge"></canvas>
-        </div>
-        <div class="gauge-label">Missed/No Audio</div>
-    </div>
-    <small id="missedNoAudioCount" class="gauge-count">(0 calls)</small>
-</div>
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="generalEnquiryGauge"></canvas>
+                                        <div class="gauge-label">General Enquiry</div>
+                                    </div>
+                                    <small id="generalEnquiryCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="manInVanGauge"></canvas>
+                                        <div class="gauge-label">Man in Van</div>
+                                    </div>
+                                    <small id="manInVanCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="complaintGauge"></canvas>
+                                        <div class="gauge-label">Complaint</div>
+                                    </div>
+                                    <small id="complaintCount" class="gauge-count">(0 calls)</small>
+                                </div>
                             </div>
                         </div>
                         
