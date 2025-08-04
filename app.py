@@ -962,7 +962,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         log_with_timestamp(f"🎵 Attempting audio download for OID {oid} (ignoring status/duration)")
         audio_file_path = download_audio(oid)
         
-         if not audio_file_path:
+        if not audio_file_path:
             # Store without audio with detailed reason
             call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
             
