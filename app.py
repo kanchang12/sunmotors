@@ -1131,7 +1131,7 @@ def fetch_and_transcribe_recent_calls():
         background_process_running = False
         return
 
-    # Get last processed call timestamp
+    # Get last processed call timestamp - WITH BUFFER
     last_call_time = None
     with db_lock:
         conn = get_db_connection()
@@ -1146,13 +1146,14 @@ def fetch_and_transcribe_recent_calls():
                 pass
         conn.close()
 
-    # Start checking from appropriate time
+    # Start checking from appropriate time - WITH BUFFER
     if not last_call_time:
-        check_since = datetime.now() - timedelta(minutes=10)
-        log_with_timestamp("🆕 No previous calls - checking last 10 minutes")
+        check_since = datetime.now() - timedelta(minutes=30)  # Increased buffer
+        log_with_timestamp("🆕 No previous calls - checking last 30 minutes")
     else:
-        check_since = last_call_time
-        log_with_timestamp(f"🔍 Checking for NEW calls since: {check_since}")
+        # IMPORTANT FIX: Add 2-minute buffer to catch any missed calls
+        check_since = last_call_time - timedelta(minutes=2)
+        log_with_timestamp(f"🔍 Checking for NEW calls since: {check_since} (with 2min buffer)")
 
     processed_this_session = set()
 
@@ -1168,9 +1169,11 @@ def fetch_and_transcribe_recent_calls():
                     time.sleep(30)
                     continue
                 
-                # Filter to NEW calls only
+                # Filter to NEW calls only - IMPROVED LOGIC
                 new_comms = []
                 latest_time = check_since
+                
+                log_with_timestamp(f"🔍 Examining {len(comms)} communications for new calls...")
                 
                 for comm in comms:
                     comm_obj = comm.get('object', {})
@@ -1181,15 +1184,44 @@ def fetch_and_transcribe_recent_calls():
                         continue
                         
                     try:
-                        call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+                        # Parse datetime with better error handling
+                        call_dt = None
+                        if 'T' in call_datetime:
+                            call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+                        else:
+                            # Try different datetime formats
+                            for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f']:
+                                try:
+                                    call_dt = datetime.strptime(call_datetime, fmt)
+                                    break
+                                except:
+                                    continue
                         
-                        # Only process if call is AFTER check time
-                        if call_dt > check_since and oid not in processed_this_session:
+                        if not call_dt:
+                            log_with_timestamp(f"⚠️ Could not parse datetime: {call_datetime}")
+                            continue
+                        
+                        # Check if already processed in database
+                        with db_lock:
+                            conn = get_db_connection()
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
+                            already_exists = cursor.fetchone() is not None
+                            conn.close()
+                        
+                        # IMPROVED LOGIC: Process if call is newer than check_since AND not already in DB
+                        if call_dt > check_since and not already_exists and oid not in processed_this_session:
                             new_comms.append(comm)
                             processed_this_session.add(oid)
                             latest_time = max(latest_time, call_dt)
-                            log_with_timestamp(f"🆕 Found NEW call OID {oid}")
-                    except:
+                            log_with_timestamp(f"🆕 Found NEW call OID {oid} at {call_dt}")
+                        elif already_exists:
+                            log_with_timestamp(f"⏭️ Skipping OID {oid} - already in database")
+                        elif call_dt <= check_since:
+                            log_with_timestamp(f"⏭️ Skipping OID {oid} - too old ({call_dt} <= {check_since})")
+                            
+                    except Exception as e:
+                        log_with_timestamp(f"⚠️ Error processing comm {oid}: {e}")
                         continue
 
                 if new_comms:
@@ -1209,10 +1241,10 @@ def fetch_and_transcribe_recent_calls():
                         except Exception as e:
                             log_error("Error processing call", e)
 
-                    # Update check time
-                    check_since = latest_time
+                    # Update check time - but keep the buffer
+                    check_since = latest_time - timedelta(minutes=1)  # Keep 1min buffer
                 else:
-                    log_with_timestamp("📭 No NEW calls to process")
+                    log_with_timestamp(f"📭 No NEW calls found (examined {len(comms)} communications)")
 
                 log_with_timestamp(f"📊 Stats - Processed: {processing_stats['total_processed']}, Errors: {processing_stats['total_errors']}")
                 time.sleep(30)
