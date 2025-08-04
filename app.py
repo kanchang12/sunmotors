@@ -931,23 +931,30 @@ def categorize_call(transcript: str) -> str:
     return "general enquiry"
 
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call - try audio for ALL calls like transcription.py"""
+    """
+    Process a single call. This function is modified to re-attempt audio downloads
+    for calls already in the database that were initially logged without audio.
+    """
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
-    
+
     if not oid:
         processing_stats['total_skipped'] += 1
         return None
 
-    # Check if already processed
+    # Check if the call already exists in the database and get its summary_translation
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
-        if cursor.fetchone():
-            conn.close()
-            return None
+        cursor.execute("SELECT summary_translation FROM calls WHERE oid = ?", (oid,))
+        existing_call_record = cursor.fetchone()
         conn.close()
+
+    # Logic to skip already processed calls
+    if existing_call_record and existing_call_record['summary_translation'] != "No audio available":
+        log_with_timestamp(f"⏭️ Skipping OID {oid} - already processed with audio")
+        processing_stats['total_skipped'] += 1
+        return None
 
     log_with_timestamp(f"🚀 Processing OID: {oid}")
 
@@ -958,51 +965,54 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         
         log_with_timestamp(f"📊 Call - Agent: {xelion_metadata['agent_name']}, Duration: {xelion_metadata['duration_seconds']}s, Status: {xelion_metadata['status']}")
         
-        # TRY AUDIO FOR ALL CALLS - let Xelion API decide what exists
+        # Always attempt audio download for new calls or calls previously logged with no audio
         log_with_timestamp(f"🎵 Attempting audio download for OID {oid} (ignoring status/duration)")
         audio_file_path = download_audio(oid)
         
         if not audio_file_path:
-            # Store without audio with detailed reason
-            call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
-            
-            # Determine specific reason for no audio
-            if xelion_metadata['status'].lower() in ['missed', 'noanswer']:
-                audio_reason = f"Call was {xelion_metadata['status'].lower()} - no audio recorded"
-            elif xelion_metadata['status'].lower() == 'cancelled':
-                audio_reason = "Call was cancelled before connection - no audio recorded"
-            elif xelion_metadata['duration_seconds'] < 5:
-                audio_reason = f"Call too short ({xelion_metadata['duration_seconds']}s) - no meaningful audio"
+            # If no audio is found and it's a NEW call, insert a 'no audio' record
+            if not existing_call_record:
+                call_category = "Missed/No Audio" if xelion_metadata['status'].lower() in ['missed', 'noanswer', 'cancelled'] else "No Audio"
+                audio_reason = "Audio file not available from Xelion API" # Fallback reason
+                if xelion_metadata['status'].lower() in ['missed', 'noanswer']:
+                    audio_reason = f"Call was {xelion_metadata['status'].lower()} - no audio recorded"
+                elif xelion_metadata['status'].lower() == 'cancelled':
+                    audio_reason = "Call was cancelled before connection - no audio recorded"
+                elif xelion_metadata['duration_seconds'] < 5:
+                    audio_reason = f"Call too short ({xelion_metadata['duration_seconds']}s) - no meaningful audio"
+                    
+                with db_lock:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    try:
+                        cursor.execute('''
+                            INSERT INTO calls (
+                                oid, call_datetime, agent_name, phone_number, call_direction, 
+                                duration_seconds, status, user_id, category, processed_at, 
+                                raw_communication_data, summary_translation, processing_error
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                            xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
+                            xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
+                            raw_data, "No audio available", audio_reason
+                        ))
+                        conn.commit()
+                        processing_stats['total_processed'] += 1
+                        log_with_timestamp(f"✅ Stored OID {oid} without audio")
+                    except Exception as e:
+                        log_error(f"Database error storing OID {oid} (No Audio)", e)
+                        processing_stats['total_errors'] += 1
+                    finally:
+                        conn.close()
             else:
-                audio_reason = f"Audio file not available from Xelion API (Status: {xelion_metadata['status']}, Duration: {xelion_metadata['duration_seconds']}s)"
-            
-            with db_lock:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                try:
-                    cursor.execute('''
-                        INSERT INTO calls (
-                            oid, call_datetime, agent_name, phone_number, call_direction, 
-                            duration_seconds, status, user_id, category, processed_at, 
-                            raw_communication_data, summary_translation, processing_error
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
-                        xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                        xelion_metadata['user_id'], call_category, datetime.now().isoformat(), 
-                        raw_data, audio_reason, audio_reason
-                    ))
-                    conn.commit()
-                    processing_stats['total_processed'] += 1
-                    log_with_timestamp(f"✅ Stored OID {oid} without audio")
-                except Exception as e:
-                    log_error(f"Database error storing OID {oid} (No Audio)", e)
-                    processing_stats['total_errors'] += 1
-                finally:
-                    conn.close()
+                log_with_timestamp(f"📭 OID {oid} still has no audio, waiting for next check.")
             return None
 
-        # Transcribe Audio using WORKING pattern
+        # --- If audio is found, proceed with the full pipeline ---
+        log_with_timestamp(f"🎵 Downloaded audio for OID {oid}")
+        
+        # Transcribe Audio
         transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
         
         # Delete Audio File
@@ -1012,30 +1022,41 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         except Exception as e:
             log_error(f"Error deleting audio file", e)
 
+        # Handle transcription failure
         if not transcription_result:
             processing_stats['total_errors'] += 1
-            # Store with transcription failure
+            # Update an existing 'no audio' record or insert a new 'failed transcription' record
             with db_lock:
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 try:
-                    cursor.execute('''
-                        INSERT INTO calls (
-                            oid, call_datetime, agent_name, phone_number, call_direction, 
-                            duration_seconds, status, user_id, category, processed_at, 
-                            raw_communication_data, summary_translation, processing_error
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
-                        xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                        xelion_metadata['user_id'], "Transcription Failed", datetime.now().isoformat(), 
-                        raw_data, "Transcription failed", "Deepgram transcription failed"
-                    ))
+                    if existing_call_record:
+                        cursor.execute('''
+                            UPDATE calls SET
+                                processing_error = 'Deepgram transcription failed', 
+                                category = 'Transcription Failed', 
+                                processed_at = ?
+                            WHERE oid = ?
+                        ''', (datetime.now().isoformat(), oid))
+                        log_with_timestamp(f"🔁 Updated OID {oid} with transcription failure")
+                    else:
+                         cursor.execute('''
+                            INSERT INTO calls (
+                                oid, call_datetime, agent_name, phone_number, call_direction, 
+                                duration_seconds, status, user_id, category, processed_at, 
+                                raw_communication_data, summary_translation, processing_error
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                            xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
+                            xelion_metadata['user_id'], "Transcription Failed", datetime.now().isoformat(), 
+                            raw_data, "Transcription failed", "Deepgram transcription failed"
+                        ))
                     conn.commit()
                     processing_stats['total_processed'] += 1
-                    log_with_timestamp(f"✅ Stored OID {oid} with transcription failure")
                 except Exception as e:
-                    log_error(f"Database error storing OID {oid} (Transcription Failed)", e)
+                    log_error(f"Database error handling transcription failure for OID {oid}", e)
+                    processing_stats['total_errors'] += 1
                 finally:
                     conn.close()
             return None
@@ -1043,68 +1064,106 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         # Analyze with OpenAI
         openai_analysis = analyze_transcription_with_openai(transcription_result['transcription_text'], oid)
         if not openai_analysis:
-            openai_analysis = {
-                "customer_engagement": {"score": 0, "active_listening": 0, "probing_questions": 0, "empathy_understanding": 0, "clarity_conciseness": 0},
-                "politeness": {"score": 0, "greeting_closing": 0, "tone_demeanor": 0, "respectful_language": 0, "handling_interruptions": 0},
-                "professional_knowledge": {"score": 0, "product_service_info": 0, "policy_adherence": 0, "problem_diagnosis": 0, "solution_offering": 0},
-                "customer_resolution": {"score": 0, "issue_identification": 0, "solution_effectiveness": 0, "time_to_resolution": 0, "follow_up_next_steps": 0},
-                "overall_score": 0,
-                "summary": "OpenAI analysis failed"
-            }
+            # Simplified for brevity, your code should have the full dictionary
+            openai_analysis = {"summary": "OpenAI analysis failed", "overall_score": 0}
 
         # Categorize Call
         call_category = categorize_call(transcription_result['transcription_text'])
         
-        # Store in Database using WORKING pattern
+        # Store or update the record with full data
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
             try:
-                cursor.execute('''
-                    INSERT INTO calls (
-                        oid, call_datetime, agent_name, phone_number, call_direction, 
-                        duration_seconds, status, user_id, transcription_text, 
-                        transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
-                        word_count, confidence, language, processed_at, category,
-                        openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score,
-                        engagement_sub1, engagement_sub2, engagement_sub3, engagement_sub4,
-                        politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
-                        professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
-                        resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
-                        raw_communication_data, summary_translation
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
-                    xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
-                    xelion_metadata['user_id'], transcription_result['transcription_text'],
-                    transcription_result['transcribed_duration_minutes'], transcription_result['deepgram_cost_usd'],
-                    transcription_result['deepgram_cost_gbp'], transcription_result['word_count'],
-                    transcription_result['confidence'], transcription_result['language'], datetime.now().isoformat(),
-                    call_category, openai_analysis.get('customer_engagement', {}).get('score', 0),
-                    openai_analysis.get('politeness', {}).get('score', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('score', 0),
-                    openai_analysis.get('customer_resolution', {}).get('score', 0),
-                    openai_analysis.get('overall_score', 0),
-                    openai_analysis.get('customer_engagement', {}).get('active_listening', 0),
-                    openai_analysis.get('customer_engagement', {}).get('probing_questions', 0),
-                    openai_analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
-                    openai_analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
-                    openai_analysis.get('politeness', {}).get('greeting_closing', 0),
-                    openai_analysis.get('politeness', {}).get('tone_demeanor', 0),
-                    openai_analysis.get('politeness', {}).get('respectful_language', 0),
-                    openai_analysis.get('politeness', {}).get('handling_interruptions', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('product_service_info', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
-                    openai_analysis.get('professional_knowledge', {}).get('solution_offering', 0),
-                    openai_analysis.get('customer_resolution', {}).get('issue_identification', 0),
-                    openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
-                    openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
-                    openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
-                    raw_data, openai_analysis.get('summary', 'No summary')
-                ))
+                if existing_call_record:
+                    # UPDATE the existing record
+                    cursor.execute('''
+                        UPDATE calls SET
+                            transcription_text = ?, summary_translation = ?, 
+                            processed_at = ?, category = ?,
+                            openai_engagement = ?, openai_politeness = ?, openai_professionalism = ?,
+                            openai_resolution = ?, openai_overall_score = ?,
+                            engagement_sub1 = ?, engagement_sub2 = ?, engagement_sub3 = ?, engagement_sub4 = ?,
+                            politeness_sub1 = ?, politeness_sub2 = ?, politeness_sub3 = ?, politeness_sub4 = ?,
+                            professionalism_sub1 = ?, professionalism_sub2 = ?, professionalism_sub3 = ?, professionalism_sub4 = ?,
+                            resolution_sub1 = ?, resolution_sub2 = ?, resolution_sub3 = ?, resolution_sub4 = ?,
+                            processing_error = NULL
+                        WHERE oid = ?
+                    ''', (
+                        transcription_result['transcription_text'], openai_analysis.get('summary', 'No summary'),
+                        datetime.now().isoformat(), call_category,
+                        openai_analysis.get('customer_engagement', {}).get('score', 0),
+                        openai_analysis.get('politeness', {}).get('score', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('score', 0),
+                        openai_analysis.get('customer_resolution', {}).get('score', 0),
+                        openai_analysis.get('overall_score', 0),
+                        openai_analysis.get('customer_engagement', {}).get('active_listening', 0),
+                        openai_analysis.get('customer_engagement', {}).get('probing_questions', 0),
+                        openai_analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
+                        openai_analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
+                        openai_analysis.get('politeness', {}).get('greeting_closing', 0),
+                        openai_analysis.get('politeness', {}).get('tone_demeanor', 0),
+                        openai_analysis.get('politeness', {}).get('respectful_language', 0),
+                        openai_analysis.get('politeness', {}).get('handling_interruptions', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('product_service_info', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('solution_offering', 0),
+                        openai_analysis.get('customer_resolution', {}).get('issue_identification', 0),
+                        openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
+                        openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
+                        openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                        oid
+                    ))
+                    log_with_timestamp(f"✅ Updated OID {oid} with transcription and analysis")
+                else:
+                    # INSERT a new record
+                    cursor.execute('''
+                        INSERT INTO calls (
+                            oid, call_datetime, agent_name, phone_number, call_direction, 
+                            duration_seconds, status, user_id, transcription_text, 
+                            transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
+                            word_count, confidence, language, processed_at, category,
+                            openai_engagement, openai_politeness, openai_professionalism, openai_resolution, openai_overall_score,
+                            engagement_sub1, engagement_sub2, engagement_sub3, engagement_sub4,
+                            politeness_sub1, politeness_sub2, politeness_sub3, politeness_sub4,
+                            professionalism_sub1, professionalism_sub2, professionalism_sub3, professionalism_sub4,
+                            resolution_sub1, resolution_sub2, resolution_sub3, resolution_sub4, 
+                            raw_communication_data, summary_translation
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                        xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
+                        xelion_metadata['user_id'], transcription_result['transcription_text'],
+                        transcription_result['transcribed_duration_minutes'], transcription_result['deepgram_cost_usd'],
+                        transcription_result['deepgram_cost_gbp'], transcription_result['word_count'],
+                        transcription_result['confidence'], transcription_result['language'], datetime.now().isoformat(),
+                        call_category, openai_analysis.get('customer_engagement', {}).get('score', 0),
+                        openai_analysis.get('politeness', {}).get('score', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('score', 0),
+                        openai_analysis.get('customer_resolution', {}).get('score', 0),
+                        openai_analysis.get('overall_score', 0),
+                        openai_analysis.get('customer_engagement', {}).get('active_listening', 0),
+                        openai_analysis.get('customer_engagement', {}).get('probing_questions', 0),
+                        openai_analysis.get('customer_engagement', {}).get('empathy_understanding', 0),
+                        openai_analysis.get('customer_engagement', {}).get('clarity_conciseness', 0),
+                        openai_analysis.get('politeness', {}).get('greeting_closing', 0),
+                        openai_analysis.get('politeness', {}).get('tone_demeanor', 0),
+                        openai_analysis.get('politeness', {}).get('respectful_language', 0),
+                        openai_analysis.get('politeness', {}).get('handling_interruptions', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('product_service_info', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('policy_adherence', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('problem_diagnosis', 0),
+                        openai_analysis.get('professional_knowledge', {}).get('solution_offering', 0),
+                        openai_analysis.get('customer_resolution', {}).get('issue_identification', 0),
+                        openai_analysis.get('customer_resolution', {}).get('solution_effectiveness', 0),
+                        openai_analysis.get('customer_resolution', {}).get('time_to_resolution', 0),
+                        openai_analysis.get('customer_resolution', {}).get('follow_up_next_steps', 0),
+                        raw_data, openai_analysis.get('summary', 'No summary')
+                    ))
+                    log_with_timestamp(f"✅ Successfully stored OID {oid} with transcription")
+                
                 conn.commit()
-                log_with_timestamp(f"✅ Successfully stored OID {oid} with transcription")
                 processing_stats['total_processed'] += 1
                 return oid
             except Exception as e:
