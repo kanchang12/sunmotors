@@ -1212,8 +1212,7 @@ def fetch_and_transcribe_recent_calls():
                             processed_this_session.add(oid)
                             latest_time = max(latest_time, call_dt)
                             log_with_timestamp(f"🆕 Found NEW call OID {oid} at {call_dt}")
-                        elif already_exists:
-                            log_with_timestamp(f"⏭️ Skipping OID {oid} - already in database")
+
                         elif call_dt <= check_since:
                             log_with_timestamp(f"⏭️ Skipping OID {oid} - too old ({call_dt} <= {check_since})")
                             
