@@ -619,9 +619,6 @@ def download_audio(communication_oid: str) -> Optional[str]:
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
 
-    if os.path.exists(file_path) and audio_url:
-        log_with_timestamp(f"Audio for OID {communication_oid} already exists")
-        return file_path
     
     # Try multiple times with re-auth if needed
     for attempt in range(3):
@@ -1465,7 +1462,7 @@ def get_calls_list():
                    deepgram_cost_gbp, word_count, confidence, processed_at, transcription_text
             FROM calls 
             {where_clause}
-            ORDER BY processed_at DESC 
+            ORDER BY call_datetime DESC 
             LIMIT ? OFFSET ?
         """
         
