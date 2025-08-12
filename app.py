@@ -1432,7 +1432,9 @@ def get_calls_list():
 @app.route('/api/get-wasteking-prices', methods=['POST'])
 def get_wasteking_prices_from_api():
     """
-    Handles requests from Eleven Labs, fetches live pricing from WasteKing via a three-step API process.
+    Handles requests from Eleven Labs, fetches live pricing from WasteKing
+    via a three-step API process: create booking, update with search, and
+    fetch price from webhook.
     """
     try:
         data = request.json
@@ -1449,8 +1451,7 @@ def get_wasteking_prices_from_api():
         }
 
         # Step 1: Create a BookingRef
-        log_with_timestamp("Step 1: Creating a new booking reference...")
-        create_url = f"{WASTEKING_BASE_URL}/api/booking/create/"
+        create_url = f"{WASTEKING_API_URL}/api/booking/create/"
         create_payload = {
             "type": "chatbot",
             "source": "wasteking.co.uk"
@@ -1461,11 +1462,9 @@ def get_wasteking_prices_from_api():
 
         if not booking_ref:
             return jsonify({"error": "Failed to create booking reference"}), 500
-        log_with_timestamp(f"✅ Booking reference created: {booking_ref}")
 
         # Step 2: Update the booking to perform a search
-        log_with_timestamp("Step 2: Performing search for pricing...")
-        update_url = f"{WASTEKING_BASE_URL}/api/booking/update/"
+        update_url = f"{WASTEKING_API_URL}/api/booking/update/"
         update_payload = {
             "bookingRef": booking_ref,
             "postcode": postcode,
@@ -1478,19 +1477,16 @@ def get_wasteking_prices_from_api():
         if not result_items:
             return jsonify({"message": "No results found for this search criteria"}), 404
         
-        # Extract the webhook from the first result item to get the price
-        # Assuming the first item is the most relevant
+        # Step 3: Fetch the actual price from the webhook
+        # We take the first result's webhook URL as it's typically the primary option
         webhook_url = result_items[0].get('webhook')
         if not webhook_url:
             return jsonify({"error": "No webhook URL found in the search results"}), 500
 
-        # Step 3: Fetch the actual price from the webhook
-        log_with_timestamp("Step 3: Fetching final price from webhook...")
         price_response = requests.get(webhook_url, timeout=10)
         price_response.raise_for_status()
         price_data = price_response.json()
 
-        log_with_timestamp("✅ Price data successfully fetched.")
         return jsonify({
             "status": "success",
             "bookingRef": booking_ref,
@@ -1498,10 +1494,11 @@ def get_wasteking_prices_from_api():
         }), 200
 
     except requests.exceptions.RequestException as e:
-        log_error(f"API request failed during pricing process: {e}", e)
+        # Catch network errors, timeouts, and bad HTTP status codes
         return jsonify({"error": f"API request failed: {str(e)}"}), 500
     except Exception as e:
-        log_error(f"An unexpected error occurred: {e}", e)
+        # Catch any other unexpected errors
+        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
         
 def elevenlabs_get_wasteking_prices():
     """ElevenLabs webhook for WasteKing pricing"""
