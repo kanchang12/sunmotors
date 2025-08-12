@@ -1450,7 +1450,7 @@ def get_wasteking_prices_from_api():
 
         # Step 1: Create a BookingRef
         log_with_timestamp("Step 1: Creating a new booking reference...")
-        create_url = f"{WASTEKING_API_URL}/api/booking/create/"
+        create_url = f"{WASTEKING_BASE_URL}/api/booking/create/"
         create_payload = {
             "type": "chatbot",
             "source": "wasteking.co.uk"
@@ -1465,7 +1465,7 @@ def get_wasteking_prices_from_api():
 
         # Step 2: Update the booking to perform a search
         log_with_timestamp("Step 2: Performing search for pricing...")
-        update_url = f"{WASTEKING_API_URL}/api/booking/update/"
+        update_url = f"{WASTEKING_BASE_URL}/api/booking/update/"
         update_payload = {
             "bookingRef": booking_ref,
             "postcode": postcode,
