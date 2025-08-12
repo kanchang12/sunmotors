@@ -1429,7 +1429,7 @@ def get_calls_list():
         })
 
 # --- ElevenLabs Endpoints ---
-@app.route('@app.route('/api/get-wasteking-prices', methods=['POST'])
+@app.route('/api/get-wasteking-prices', methods=['POST'])
 def get_wasteking_prices_from_api():
     """
     Handles requests from Eleven Labs, fetches live pricing from WasteKing via a three-step API process.
