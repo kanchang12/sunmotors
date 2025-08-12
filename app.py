@@ -1615,7 +1615,7 @@ def get_wasteking_prices_from_api():
         
         # Basic UK postcode validation
         import re
-        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$|^[A-Z]{1,2}[0-9][A-Z0-9]?
+        uk_postcode_pattern = r"^(GIR 0AA|[A-Z]{1,2}[0-9][0-9A-Z]?\s?[0-9][A-Z]{2})$"
 
         # Headers for WasteKing API calls
         headers = {
