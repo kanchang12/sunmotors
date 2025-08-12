@@ -18,6 +18,10 @@ from email.mime.multipart import MIMEMultipart
 import re
 from bs4 import BeautifulSoup
 
+# Twilio imports
+from twilio.rest import Client
+from twilio.twiml.voice_response import VoiceResponse, Pay
+
 # Selenium removed - using direct API calls instead
 SELENIUM_AVAILABLE = False
 
@@ -48,8 +52,13 @@ WASTEKING_BASE_URL = "https://wk-smp-api-dev.azurewebsites.net/"
 WASTEKING_ACCESS_TOKEN = "wk-KZPY-tGF-@d.Aby9fpvMC_VVWkX-GN.i7jCBhF3xceoFfhmawaNc.RH.G_-kwk8*"
 WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-breakdown/"
 
-# PayPal Configuration
-PAYPAL_PAYMENT_URL = "https://www.paypal.com/ncp/payment/BQ82GUU9VSKYN"
+# Twilio + Braintree Configuration
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', 'your_twilio_sid')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', 'your_twilio_token')
+BRAINTREE_CONNECTOR_SID = "XEf479d2720372e1d3bbeade564221029a"
+BRAINTREE_MERCHANT_ID = "99szgbfz5tr6vmjf"
+ELEVENLABS_WEBHOOK_URL = os.getenv('ELEVENLABS_WEBHOOK_URL', 'your_elevenlabs_webhook')
+SERVER_BASE_URL = "https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app"
 
 # Database configuration
 DATABASE_FILE = 'calls.db'
@@ -181,7 +190,9 @@ def init_db():
                 created_at TEXT,
                 status TEXT DEFAULT 'pending',
                 customer_phone TEXT,
-                agent_name TEXT
+                agent_name TEXT,
+                call_sid TEXT,
+                elevenlabs_conversation_id TEXT
             )
         ''')
         
@@ -192,11 +203,13 @@ def init_db():
                 booking_ref TEXT,
                 amount REAL,
                 currency TEXT DEFAULT 'GBP',
-                paypal_url TEXT,
                 payment_status TEXT DEFAULT 'pending',
                 created_at TEXT,
                 paid_at TEXT,
                 customer_phone TEXT,
+                twilio_payment_sid TEXT,
+                braintree_transaction_id TEXT,
+                call_sid TEXT,
                 FOREIGN KEY (quote_id) REFERENCES price_quotes (quote_id)
             )
         ''')
@@ -206,6 +219,7 @@ def init_db():
         log_with_timestamp("Database initialized successfully")
     except Exception as e:
         log_error("Failed to initialize database", e)
+
 # --- WasteKing Session Management ---
 def save_wasteking_session(session):
     """Save authenticated WasteKing session for 30 days"""
@@ -1210,6 +1224,102 @@ def fetch_and_transcribe_recent_calls():
             log_error("Monitoring loop error", e)
             time.sleep(60)
 
+# --- Twilio Payment Functions ---
+def get_twilio_client():
+    """Initialize Twilio client"""
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+        log_error("Twilio credentials not configured")
+        return None
+    
+    try:
+        return Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    except Exception as e:
+        log_error("Failed to initialize Twilio client", e)
+        return None
+
+def generate_payment_twiml(amount: float, currency: str, payment_id: str, quote_id: str) -> str:
+    """Generate TwiML for Braintree payment processing"""
+    try:
+        response = VoiceResponse()
+        response.say("Please hold while we process your payment securely.", voice="alice")
+        
+        # Create Pay verb with Braintree connector
+        pay = Pay(
+            payment_connector=BRAINTREE_CONNECTOR_SID,
+            charge_amount=str(amount),
+            currency=currency,
+            description="WasteKing Service Payment",
+            action=f"{SERVER_BASE_URL}/twilio/payment-callback/{payment_id}"
+        )
+        
+        # Add required parameters for Braintree
+        pay.parameter(name="merchantAccountId", value=BRAINTREE_MERCHANT_ID)
+        pay.parameter(name="name", value="WasteKing Service")
+        pay.parameter(name="kind", value="sale")
+        pay.parameter(name="quantity", value="1")
+        pay.parameter(name="unitAmount", value=str(amount))
+        pay.parameter(name="totalAmount", value=str(amount))
+        
+        response.append(pay)
+        
+        # Fallback message
+        response.say("Thank you for your payment. Please hold while we complete your booking.", voice="alice")
+        
+        return str(response)
+        
+    except Exception as e:
+        log_error("Error generating payment TwiML", e)
+        return None
+
+def transfer_call_to_payment(call_sid: str, payment_twiml_url: str) -> bool:
+    """Transfer active call to payment processing"""
+    try:
+        client = get_twilio_client()
+        if not client:
+            return False
+        
+        # Update the call to execute payment TwiML
+        call = client.calls(call_sid).update(
+            url=payment_twiml_url,
+            method='GET'
+        )
+        
+        log_with_timestamp(f"✅ Call {call_sid} transferred to payment processing")
+        return True
+        
+    except Exception as e:
+        log_error(f"Failed to transfer call {call_sid} to payment", e)
+        return False
+
+def transfer_call_back_to_elevenlabs(call_sid: str, conversation_id: str = None) -> bool:
+    """Transfer call back to ElevenLabs after payment"""
+    try:
+        client = get_twilio_client()
+        if not client:
+            return False
+        
+        # Create TwiML to transfer back to ElevenLabs
+        if ELEVENLABS_WEBHOOK_URL and conversation_id:
+            transfer_url = f"{ELEVENLABS_WEBHOOK_URL}?conversation_id={conversation_id}&payment_complete=true"
+        else:
+            # Fallback - just complete the call gracefully
+            response = VoiceResponse()
+            response.say("Your payment has been processed successfully. Your booking is now complete. Thank you for choosing WasteKing.", voice="alice")
+            response.hangup()
+            transfer_url = f"{SERVER_BASE_URL}/twilio/complete-call"
+        
+        call = client.calls(call_sid).update(
+            url=transfer_url,
+            method='POST'
+        )
+        
+        log_with_timestamp(f"✅ Call {call_sid} transferred back to ElevenLabs")
+        return True
+        
+    except Exception as e:
+        log_error(f"Failed to transfer call {call_sid} back to ElevenLabs", e)
+        return False
+
 # --- Flask App Setup ---
 app = Flask(__name__)
 init_db()
@@ -1224,6 +1334,13 @@ if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_ke
     log_with_timestamp(f"OpenAI test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
 else:
     log_with_timestamp("⚠️ OpenAI not configured")
+
+# Test Twilio connection
+twilio_client = get_twilio_client()
+if twilio_client:
+    log_with_timestamp("✅ Twilio client initialized")
+else:
+    log_with_timestamp("❌ Twilio client failed to initialize")
 
 # --- Flask Routes ---
 @app.route('/')
@@ -1244,6 +1361,8 @@ def index():
 def get_status():
     """Get system status"""
     openai_test_result = test_openai_connection()
+    twilio_test = get_twilio_client() is not None
+    
     return jsonify({
         "background_running": background_process_running,
         "processing_stats": processing_stats,
@@ -1252,6 +1371,8 @@ def get_status():
         "openai_connection_test": openai_test_result,
         "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
         "wasteking_session_valid": load_wasteking_session() is not None,
+        "twilio_configured": twilio_test,
+        "braintree_merchant_id": BRAINTREE_MERCHANT_ID,
         "last_poll": processing_stats.get('last_poll_time', 'Never'),
         "last_error": processing_stats.get('last_error', 'None')
     })
@@ -1549,6 +1670,8 @@ def get_wasteking_prices_from_api():
         quote_id = str(uuid.uuid4())
         customer_phone = data.get('customer_phone', 'Unknown')
         agent_name = data.get('agent_name', 'Agent')
+        call_sid = data.get('call_sid', '')
+        conversation_id = data.get('conversation_id', '')
 
         # Store the quote in database (even if no results found)
         with db_lock:
@@ -1556,12 +1679,13 @@ def get_wasteking_prices_from_api():
             cursor = conn.cursor()
             try:
                 cursor.execute('''
-                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status, call_sid, elevenlabs_conversation_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     quote_id, booking_ref, postcode, service, json.dumps(update_data), 
                     datetime.now().isoformat(), customer_phone, agent_name, 
-                    'no_results' if update_response.status_code != 200 else 'pending'
+                    'no_results' if update_response.status_code != 200 else 'pending',
+                    call_sid, conversation_id
                 ))
                 conn.commit()
                 log_with_timestamp(f"📝 Stored quote {quote_id} in database")
@@ -1631,12 +1755,13 @@ def get_wasteking_prices_from_api():
             "error": f"Unexpected error: {str(e)}",
             "message": "System error occurred. Please contact us directly."
         }), 500
+
 @app.route('/api/request-payment', methods=['POST'])
 def request_payment():
     """
-    Creates payment request and returns PayPal link
+    Modified to trigger Twilio call transfer for Braintree payment instead of PayPal
     """
-    log_with_timestamp("💳 Payment request received")
+    log_with_timestamp("💳 Braintree payment request received")
     
     try:
         data = request.json
@@ -1647,13 +1772,20 @@ def request_payment():
         amount = data.get('amount')
         currency = data.get('currency', 'GBP')
         customer_phone = data.get('customer_phone', 'Unknown')
+        call_sid = data.get('call_sid')  # Get current call SID from ElevenLabs
 
-        log_with_timestamp(f"💳 Payment request for quote: {quote_id}, amount: {amount}")
+        log_with_timestamp(f"💳 Braintree payment request for quote: {quote_id}, amount: {amount}, call_sid: {call_sid}")
 
         if not quote_id or not amount:
             return jsonify({
                 "error": "Quote ID and amount are required",
                 "required_fields": ["quote_id", "amount"]
+            }), 400
+
+        if not call_sid:
+            return jsonify({
+                "error": "Call SID is required for payment processing",
+                "message": "Unable to process payment without active call information"
             }), 400
 
         # Generate payment ID
@@ -1665,7 +1797,7 @@ def request_payment():
             cursor = conn.cursor()
             try:
                 # Check if quote exists
-                cursor.execute("SELECT booking_ref, status FROM price_quotes WHERE quote_id = ?", (quote_id,))
+                cursor.execute("SELECT booking_ref, status, elevenlabs_conversation_id FROM price_quotes WHERE quote_id = ?", (quote_id,))
                 quote_row = cursor.fetchone()
                 
                 if not quote_row:
@@ -1678,19 +1810,37 @@ def request_payment():
 
                 booking_ref = quote_row[0]
                 quote_status = quote_row[1]
+                conversation_id = quote_row[2]
                 
                 log_with_timestamp(f"✅ Found quote: {quote_id}, booking_ref: {booking_ref}, status: {quote_status}")
 
                 # Insert payment request
                 cursor.execute('''
-                    INSERT INTO payments (payment_id, quote_id, booking_ref, amount, currency, paypal_url, created_at, customer_phone)
+                    INSERT INTO payments (payment_id, quote_id, booking_ref, amount, currency, created_at, customer_phone, call_sid)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     payment_id, quote_id, booking_ref, float(amount), currency, 
-                    PAYPAL_PAYMENT_URL, datetime.now().isoformat(), customer_phone
+                    datetime.now().isoformat(), customer_phone, call_sid
                 ))
                 conn.commit()
                 log_with_timestamp(f"💳 Created payment request {payment_id}")
+
+                # Generate TwiML for payment processing
+                payment_twiml = generate_payment_twiml(float(amount), currency, payment_id, quote_id)
+                if not payment_twiml:
+                    return jsonify({
+                        "error": "Failed to generate payment flow",
+                        "message": "Unable to process payment. Please try again."
+                    }), 500
+
+                # Store conversation ID for later transfer back
+                if conversation_id:
+                    cursor.execute('''
+                        UPDATE payments 
+                        SET elevenlabs_conversation_id = ?
+                        WHERE payment_id = ?
+                    ''', (conversation_id, payment_id))
+                    conn.commit()
 
                 return jsonify({
                     "status": "success",
@@ -1698,8 +1848,9 @@ def request_payment():
                     "quote_id": quote_id,
                     "amount": float(amount),
                     "currency": currency,
-                    "paypal_url": PAYPAL_PAYMENT_URL,
-                    "message": f"Payment link ready. Please send this PayPal link to the customer: {PAYPAL_PAYMENT_URL}",
+                    "call_transfer_initiated": True,
+                    "payment_twiml_url": f"{SERVER_BASE_URL}/twilio/payment-twiml/{payment_id}",
+                    "message": f"Payment processing initiated. Customer will be transferred to secure payment system.",
                     "timestamp": datetime.now().isoformat()
                 }), 200
 
@@ -1719,12 +1870,167 @@ def request_payment():
             "message": "Unable to process payment. Please contact us directly."
         }), 500
 
+@app.route('/twilio/payment-twiml/<payment_id>', methods=['GET'])
+def get_payment_twiml(payment_id):
+    """Serve TwiML for payment processing"""
+    try:
+        # Get payment details from database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT amount, currency, quote_id FROM payments WHERE payment_id = ?", (payment_id,))
+            payment_row = cursor.fetchone()
+            conn.close()
+        
+        if not payment_row:
+            # Return error TwiML
+            response = VoiceResponse()
+            response.say("We're sorry, but there was an error processing your payment. Please try again later.", voice="alice")
+            response.hangup()
+            return str(response), 200, {'Content-Type': 'text/xml'}
+        
+        amount = payment_row[0]
+        currency = payment_row[1]
+        quote_id = payment_row[2]
+        
+        # Generate and return payment TwiML
+        payment_twiml = generate_payment_twiml(amount, currency, payment_id, quote_id)
+        if payment_twiml:
+            return payment_twiml, 200, {'Content-Type': 'text/xml'}
+        else:
+            # Fallback error TwiML
+            response = VoiceResponse()
+            response.say("We're sorry, but there was an error setting up your payment. Please try again later.", voice="alice")
+            response.hangup()
+            return str(response), 200, {'Content-Type': 'text/xml'}
+            
+    except Exception as e:
+        log_error(f"Error serving payment TwiML for {payment_id}", e)
+        response = VoiceResponse()
+        response.say("We're sorry, but there was a system error. Please try again later.", voice="alice")
+        response.hangup()
+        return str(response), 200, {'Content-Type': 'text/xml'}
+
+@app.route('/twilio/payment-callback/<payment_id>', methods=['POST'])
+def payment_callback(payment_id):
+    """Handle Braintree payment callback from Twilio"""
+    log_with_timestamp(f"💳 Payment callback received for {payment_id}")
+    
+    try:
+        # Get callback data from Twilio
+        callback_data = request.form.to_dict()
+        log_with_timestamp(f"📊 Payment callback data: {callback_data}")
+        
+        payment_result = callback_data.get('PaymentResult')
+        payment_sid = callback_data.get('PaymentSid')
+        transaction_id = callback_data.get('PaymentTransactionId', '')
+        call_sid = callback_data.get('CallSid')
+        
+        # Update payment in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                if payment_result == 'completed':
+                    # Payment successful
+                    cursor.execute('''
+                        UPDATE payments 
+                        SET payment_status = 'completed', paid_at = ?, twilio_payment_sid = ?, braintree_transaction_id = ?
+                        WHERE payment_id = ?
+                    ''', (datetime.now().isoformat(), payment_sid, transaction_id, payment_id))
+                    
+                    # Also update quote status
+                    cursor.execute('''
+                        UPDATE price_quotes 
+                        SET status = 'paid'
+                        WHERE quote_id = (SELECT quote_id FROM payments WHERE payment_id = ?)
+                    ''', (payment_id,))
+                    
+                    log_with_timestamp(f"✅ Payment {payment_id} completed successfully")
+                    
+                else:
+                    # Payment failed or declined
+                    cursor.execute('''
+                        UPDATE payments 
+                        SET payment_status = 'failed', twilio_payment_sid = ?
+                        WHERE payment_id = ?
+                    ''', (payment_sid, payment_id))
+                    
+                    log_with_timestamp(f"❌ Payment {payment_id} failed: {payment_result}")
+                
+                conn.commit()
+                
+                # Get conversation ID for transfer back
+                cursor.execute("SELECT elevenlabs_conversation_id FROM payments WHERE payment_id = ?", (payment_id,))
+                conversation_row = cursor.fetchone()
+                conversation_id = conversation_row[0] if conversation_row else None
+                
+                conn.close()
+                
+                # Generate response TwiML based on payment result
+                response = VoiceResponse()
+                
+                if payment_result == 'completed':
+                    response.say("Thank you! Your payment has been processed successfully.", voice="alice")
+                    response.pause(length=1)
+                    response.say("Your booking is now complete. You will receive a confirmation shortly.", voice="alice")
+                    
+                    # Transfer back to ElevenLabs if possible
+                    if call_sid:
+                        # Use a slight delay before transfer
+                        response.pause(length=2)
+                        response.say("Please hold while we complete your booking.", voice="alice")
+                        # Note: The actual transfer back happens in a separate thread to avoid blocking
+                        threading.Thread(
+                            target=transfer_call_back_to_elevenlabs, 
+                            args=(call_sid, conversation_id)
+                        ).start()
+                    
+                else:
+                    response.say("We're sorry, but your payment could not be processed at this time.", voice="alice")
+                    response.pause(length=1)
+                    response.say("Please try again or contact us directly for assistance.", voice="alice")
+                    
+                    if call_sid:
+                        # Transfer back to ElevenLabs for error handling
+                        threading.Thread(
+                            target=transfer_call_back_to_elevenlabs, 
+                            args=(call_sid, conversation_id)
+                        ).start()
+                
+                return str(response), 200, {'Content-Type': 'text/xml'}
+                
+            except Exception as e:
+                log_error(f"Database error in payment callback", e)
+                conn.close()
+                
+                # Return error TwiML
+                response = VoiceResponse()
+                response.say("We're sorry, but there was an error processing your payment. Please contact us directly.", voice="alice")
+                return str(response), 200, {'Content-Type': 'text/xml'}
+        
+    except Exception as e:
+        log_error(f"Error in payment callback for {payment_id}", e)
+        
+        # Return error TwiML
+        response = VoiceResponse()
+        response.say("We're sorry, but there was a system error. Please contact us directly.", voice="alice")
+        return str(response), 200, {'Content-Type': 'text/xml'}
+
+@app.route('/twilio/complete-call', methods=['GET', 'POST'])
+def complete_call():
+    """Fallback endpoint to complete calls gracefully"""
+    response = VoiceResponse()
+    response.say("Thank you for choosing WasteKing. Your booking has been processed. Have a great day!", voice="alice")
+    response.hangup()
+    return str(response), 200, {'Content-Type': 'text/xml'}
+
 @app.route('/api/confirm-payment', methods=['POST'])
 def confirm_payment():
     """
-    Confirms payment completion
+    Manual payment confirmation (kept for backward compatibility)
     """
-    log_with_timestamp("✅ Payment confirmation received")
+    log_with_timestamp("✅ Manual payment confirmation received")
     
     try:
         data = request.json
@@ -1736,7 +2042,7 @@ def confirm_payment():
         if not payment_id:
             return jsonify({"error": "Payment ID is required"}), 400
 
-        log_with_timestamp(f"✅ Confirming payment: {payment_id}")
+        log_with_timestamp(f"✅ Manually confirming payment: {payment_id}")
 
         # Update payment status
         with db_lock:
@@ -1765,7 +2071,7 @@ def confirm_payment():
                 ''', (payment_id,))
 
                 conn.commit()
-                log_with_timestamp(f"✅ Payment {payment_id} marked as completed")
+                log_with_timestamp(f"✅ Payment {payment_id} manually confirmed")
 
                 return jsonify({
                     "status": "success",
@@ -1800,8 +2106,9 @@ def get_quotes():
             
             cursor.execute('''
                 SELECT q.quote_id, q.booking_ref, q.postcode, q.service, q.created_at, 
-                       q.status, q.customer_phone, q.agent_name,
-                       p.payment_id, p.amount, p.currency, p.payment_status, p.paid_at
+                       q.status, q.customer_phone, q.agent_name, q.call_sid, q.elevenlabs_conversation_id,
+                       p.payment_id, p.amount, p.currency, p.payment_status, p.paid_at,
+                       p.twilio_payment_sid, p.braintree_transaction_id
                 FROM price_quotes q
                 LEFT JOIN payments p ON q.quote_id = p.quote_id
                 ORDER BY q.created_at DESC
@@ -1824,6 +2131,42 @@ def get_quotes():
     except Exception as e:
         log_error("Error fetching quotes", e)
         return jsonify({"error": f"Failed to fetch quotes: {str(e)}"}), 500
+
+@app.route('/api/get-payments', methods=['GET'])
+def get_payments():
+    """Get all payment records"""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT p.payment_id, p.quote_id, p.booking_ref, p.amount, p.currency,
+                       p.payment_status, p.created_at, p.paid_at, p.customer_phone,
+                       p.twilio_payment_sid, p.braintree_transaction_id, p.call_sid,
+                       q.postcode, q.service, q.agent_name
+                FROM payments p
+                LEFT JOIN price_quotes q ON p.quote_id = q.quote_id
+                ORDER BY p.created_at DESC
+            ''')
+            
+            payments = []
+            for row in cursor.fetchall():
+                payment = dict(row)
+                payments.append(payment)
+            
+            conn.close()
+            
+            return jsonify({
+                "status": "success",
+                "payments": payments,
+                "count": len(payments),
+                "timestamp": datetime.now().isoformat()
+            })
+
+    except Exception as e:
+        log_error("Error fetching payments", e)
+        return jsonify({"error": f"Failed to fetch payments: {str(e)}"}), 500
 
 @app.route('/api/setup-wasteking', methods=['POST'])
 def setup_wasteking_session():
@@ -1853,6 +2196,43 @@ def setup_wasteking_session():
         return jsonify({
             "status": "error",
             "message": f"Setup failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/test-twilio', methods=['POST'])
+def test_twilio_connection():
+    """Test Twilio connection and Braintree configuration"""
+    try:
+        client = get_twilio_client()
+        if not client:
+            return jsonify({
+                "status": "error",
+                "message": "Failed to initialize Twilio client"
+            }), 500
+        
+        # Test account info
+        account = client.api.accounts(TWILIO_ACCOUNT_SID).fetch()
+        
+        # Test payment connector
+        connectors = client.trusthub.v1.payment_connectors.list(limit=20)
+        braintree_connector_found = any(c.sid == BRAINTREE_CONNECTOR_SID for c in connectors)
+        
+        return jsonify({
+            "status": "success",
+            "message": "Twilio connection successful",
+            "account_status": account.status,
+            "account_friendly_name": account.friendly_name,
+            "braintree_connector_configured": braintree_connector_found,
+            "braintree_connector_sid": BRAINTREE_CONNECTOR_SID,
+            "braintree_merchant_id": BRAINTREE_MERCHANT_ID,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        log_error("Error testing Twilio connection", e)
+        return jsonify({
+            "status": "error",
+            "message": f"Twilio test failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }), 500
 
