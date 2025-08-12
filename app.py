@@ -44,7 +44,7 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 # WasteKing API Configuration
 WASTEKING_EMAIL = os.getenv('WASTEKING_EMAIL', 'kanchan.ghosh@wasteking.co.uk')
 WASTEKING_PASSWORD = os.getenv('WASTEKING_PASSWORD', 'T^269725365789ad')
-WASTEKING_BASE_URL = "https://wk-smp-dev.azurewebsites.net/"
+WASTEKING_BASE_URL = "https://wk-smp-api-dev.azurewebsites.net/"
 WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-breakdown/"
 
 # Database configuration
