@@ -1648,12 +1648,65 @@ def get_wasteking_prices_from_api():
         log_with_timestamp("📝 Step 2: Updating booking with search...")
 
         # Step 2: Update the booking to perform a search
+        # Map ElevenLabs service names to WasteKing API names (based on WasteKing call flow document)
+        service_mapping = {
+            # Skip Hire variations
+            "skip hire": "skip",
+            "skip": "skip",
+            "skips": "skip",
+            "skip rental": "skip",
+            
+            # Man & Van variations  
+            "man and van": "man-in-van",
+            "man in van": "man-in-van",
+            "man & van": "man-in-van",
+            "van": "man-in-van",
+            "man with van": "man-in-van",
+            "removal van": "man-in-van",
+            
+            # Grab Hire variations
+            "grab hire": "grab",
+            "grab": "grab",
+            "grab lorry": "grab",
+            "grab truck": "grab",
+            
+            # Clearance variations
+            "house clearance": "clearance",
+            "office clearance": "clearance",
+            "clearance": "clearance",
+            "property clearance": "clearance",
+            "house clear": "clearance",
+            "office clear": "clearance",
+            
+            # Waste removal general
+            "waste removal": "removal",
+            "removal": "removal",
+            "rubbish removal": "removal",
+            "rubbish collection": "removal",
+            "waste collection": "removal",
+            
+            # Specialist services (these may need human transfer but try API first)
+            "hazardous waste": "hazardous",
+            "asbestos": "asbestos",
+            "electrical waste": "weee",
+            "weee": "weee",
+            "chemical disposal": "chemical",
+            
+            # General fallbacks
+            "waste": "removal",
+            "rubbish": "removal"
+        }
+        
+        # Convert service name
+        wasteking_service = service_mapping.get(service.lower(), service.lower())
+        log_with_timestamp(f"🔄 Mapped service '{service}' → '{wasteking_service}'")
+        
         update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
         update_payload = {
             "bookingRef": booking_ref,
             "search": {
                 "postCode": postcode,
-                "service": service
+                "service": wasteking_service
             }
         }
         
@@ -1782,11 +1835,11 @@ def request_payment():
                 "required_fields": ["quote_id", "amount"]
             }), 400
 
+        # Note: call_sid might be None if ElevenLabs doesn't provide it yet
         if not call_sid:
-            return jsonify({
-                "error": "Call SID is required for payment processing",
-                "message": "Unable to process payment without active call information"
-            }), 400
+            log_with_timestamp(f"⚠️ Warning: No call_sid provided for payment {payment_id}")
+            # For now, continue without call transfer - just create payment record
+            call_sid = "pending_from_elevenlabs"
 
         # Generate payment ID
         payment_id = str(uuid.uuid4())
