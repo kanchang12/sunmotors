@@ -134,6 +134,8 @@ def init_db():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        
+        # Add the calls table (existing code)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS calls (
                 oid TEXT PRIMARY KEY,
@@ -168,7 +170,7 @@ def init_db():
             )
         ''')
         
-        # Add new tables for price quotes and payments
+        # Updated price_quotes table with status column
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS price_quotes (
                 quote_id TEXT PRIMARY KEY,
@@ -204,7 +206,6 @@ def init_db():
         log_with_timestamp("Database initialized successfully")
     except Exception as e:
         log_error("Failed to initialize database", e)
-
 # --- WasteKing Session Management ---
 def save_wasteking_session(session):
     """Save authenticated WasteKing session for 30 days"""
@@ -1504,7 +1505,7 @@ def get_wasteking_prices_from_api():
         }
         
         log_with_timestamp(f"🌐 POST {create_url}")
-        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15)
+        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15, verify=False)
         
         log_with_timestamp(f"📊 Create response: {create_response.status_code}")
         
@@ -1538,36 +1539,29 @@ def get_wasteking_prices_from_api():
         log_with_timestamp(f"🌐 POST {update_url}")
         log_with_timestamp(f"📦 Payload: {update_payload}")
         
-        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20)
+        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20, verify=False)
         
         log_with_timestamp(f"📊 Update response: {update_response.status_code}")
-        
-        if update_response.status_code != 200:
-            log_with_timestamp(f"❌ Update failed: {update_response.text}")
-            return jsonify({
-                "error": f"Search failed: {update_response.status_code}",
-                "details": update_response.text,
-                "bookingRef": booking_ref
-            }), 500
-
         update_data = update_response.json()
-        log_with_timestamp(f"✅ Search completed: {update_data}")
+        log_with_timestamp(f"📄 Update response body: {update_data}")
 
-        # Store the quote in database
+        # Generate quote ID regardless of search results
         quote_id = str(uuid.uuid4())
         customer_phone = data.get('customer_phone', 'Unknown')
         agent_name = data.get('agent_name', 'Agent')
 
+        # Store the quote in database (even if no results found)
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
             try:
                 cursor.execute('''
-                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     quote_id, booking_ref, postcode, service, json.dumps(update_data), 
-                    datetime.now().isoformat(), customer_phone, agent_name
+                    datetime.now().isoformat(), customer_phone, agent_name, 
+                    'no_results' if update_response.status_code != 200 else 'pending'
                 ))
                 conn.commit()
                 log_with_timestamp(f"📝 Stored quote {quote_id} in database")
@@ -1576,32 +1570,71 @@ def get_wasteking_prices_from_api():
             finally:
                 conn.close()
 
-        return jsonify({
-            "status": "success",
-            "quote_id": quote_id,
-            "bookingRef": booking_ref,
-            "search_results": update_data,
-            "postcode": postcode,
-            "service": service,
-            "timestamp": datetime.now().isoformat(),
-            "message": "Price quote generated successfully. Agent will ask customer about payment."
-        }), 200
+        # Handle different response scenarios
+        if update_response.status_code == 200:
+            # Success case
+            return jsonify({
+                "status": "success",
+                "quote_id": quote_id,
+                "bookingRef": booking_ref,
+                "search_results": update_data,
+                "postcode": postcode,
+                "service": service,
+                "timestamp": datetime.now().isoformat(),
+                "message": "Price quote generated successfully. Agent can ask customer about payment."
+            }), 200
+            
+        elif update_response.status_code == 404 or "No results found" in str(update_data):
+            # No results found - still return success but with message
+            return jsonify({
+                "status": "success",
+                "quote_id": quote_id,
+                "bookingRef": booking_ref,
+                "search_results": update_data,
+                "postcode": postcode,
+                "service": service,
+                "timestamp": datetime.now().isoformat(),
+                "message": f"No prices available for {service} service in {postcode}. Please try a different postcode or contact us directly.",
+                "no_results": True
+            }), 200
+            
+        else:
+            # Other error
+            log_with_timestamp(f"❌ Update failed: {update_data}")
+            return jsonify({
+                "status": "error",
+                "quote_id": quote_id,
+                "bookingRef": booking_ref,
+                "error": f"Search failed: {update_response.status_code}",
+                "details": update_data,
+                "postcode": postcode,
+                "service": service,
+                "timestamp": datetime.now().isoformat(),
+                "message": "Unable to get pricing at this time. Please contact us directly."
+            }), 200  # Return 200 so ElevenLabs doesn't see it as error
 
     except requests.exceptions.Timeout:
         log_error("WasteKing API timeout")
-        return jsonify({"error": "API timeout - please try again"}), 504
+        return jsonify({
+            "error": "API timeout - please try again",
+            "message": "Service temporarily unavailable. Please try again in a moment."
+        }), 504
     except requests.exceptions.RequestException as e:
         log_error("WasteKing API request failed", e)
-        return jsonify({"error": f"API request failed: {str(e)}"}), 500
+        return jsonify({
+            "error": f"API request failed: {str(e)}",
+            "message": "Unable to connect to pricing service. Please contact us directly."
+        }), 500
     except Exception as e:
         log_error("Unexpected error in WasteKing API", e)
-        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
-
+        return jsonify({
+            "error": f"Unexpected error: {str(e)}",
+            "message": "System error occurred. Please contact us directly."
+        }), 500
 @app.route('/api/request-payment', methods=['POST'])
 def request_payment():
     """
     Creates payment request and returns PayPal link
-    Called when agent asks customer if they want to proceed with payment
     """
     log_with_timestamp("💳 Payment request received")
     
@@ -1614,6 +1647,8 @@ def request_payment():
         amount = data.get('amount')
         currency = data.get('currency', 'GBP')
         customer_phone = data.get('customer_phone', 'Unknown')
+
+        log_with_timestamp(f"💳 Payment request for quote: {quote_id}, amount: {amount}")
 
         if not quote_id or not amount:
             return jsonify({
@@ -1629,14 +1664,22 @@ def request_payment():
             conn = get_db_connection()
             cursor = conn.cursor()
             try:
-                # Get quote details
-                cursor.execute("SELECT booking_ref FROM price_quotes WHERE quote_id = ?", (quote_id,))
+                # Check if quote exists
+                cursor.execute("SELECT booking_ref, status FROM price_quotes WHERE quote_id = ?", (quote_id,))
                 quote_row = cursor.fetchone()
                 
                 if not quote_row:
-                    return jsonify({"error": "Quote not found"}), 404
+                    log_with_timestamp(f"❌ Quote not found: {quote_id}")
+                    return jsonify({
+                        "error": "Quote not found", 
+                        "quote_id": quote_id,
+                        "message": "Invalid quote ID. Please get a new price quote."
+                    }), 404
 
                 booking_ref = quote_row[0]
+                quote_status = quote_row[1]
+                
+                log_with_timestamp(f"✅ Found quote: {quote_id}, booking_ref: {booking_ref}, status: {quote_status}")
 
                 # Insert payment request
                 cursor.execute('''
@@ -1649,32 +1692,37 @@ def request_payment():
                 conn.commit()
                 log_with_timestamp(f"💳 Created payment request {payment_id}")
 
+                return jsonify({
+                    "status": "success",
+                    "payment_id": payment_id,
+                    "quote_id": quote_id,
+                    "amount": float(amount),
+                    "currency": currency,
+                    "paypal_url": PAYPAL_PAYMENT_URL,
+                    "message": f"Payment link ready. Please send this PayPal link to the customer: {PAYPAL_PAYMENT_URL}",
+                    "timestamp": datetime.now().isoformat()
+                }), 200
+
             except Exception as e:
                 log_error(f"Failed to create payment request", e)
-                return jsonify({"error": "Database error"}), 500
+                return jsonify({
+                    "error": "Database error",
+                    "message": "Unable to process payment request. Please try again."
+                }), 500
             finally:
                 conn.close()
 
-        return jsonify({
-            "status": "success",
-            "payment_id": payment_id,
-            "quote_id": quote_id,
-            "amount": float(amount),
-            "currency": currency,
-            "paypal_url": PAYPAL_PAYMENT_URL,
-            "message": f"Please send this PayPal link to the customer: {PAYPAL_PAYMENT_URL}",
-            "timestamp": datetime.now().isoformat()
-        }), 200
-
     except Exception as e:
         log_error("Error creating payment request", e)
-        return jsonify({"error": f"Payment request failed: {str(e)}"}), 500
+        return jsonify({
+            "error": f"Payment request failed: {str(e)}",
+            "message": "Unable to process payment. Please contact us directly."
+        }), 500
 
 @app.route('/api/confirm-payment', methods=['POST'])
 def confirm_payment():
     """
     Confirms payment completion
-    Called when customer has completed payment
     """
     log_with_timestamp("✅ Payment confirmation received")
     
@@ -1688,6 +1736,8 @@ def confirm_payment():
         if not payment_id:
             return jsonify({"error": "Payment ID is required"}), 400
 
+        log_with_timestamp(f"✅ Confirming payment: {payment_id}")
+
         # Update payment status
         with db_lock:
             conn = get_db_connection()
@@ -1700,7 +1750,12 @@ def confirm_payment():
                 ''', (datetime.now().isoformat(), payment_id))
                 
                 if cursor.rowcount == 0:
-                    return jsonify({"error": "Payment not found"}), 404
+                    log_with_timestamp(f"❌ Payment not found: {payment_id}")
+                    return jsonify({
+                        "error": "Payment not found",
+                        "payment_id": payment_id,
+                        "message": "Invalid payment ID."
+                    }), 404
 
                 # Also update the quote status
                 cursor.execute('''
@@ -1712,22 +1767,28 @@ def confirm_payment():
                 conn.commit()
                 log_with_timestamp(f"✅ Payment {payment_id} marked as completed")
 
+                return jsonify({
+                    "status": "success",
+                    "payment_id": payment_id,
+                    "message": "Payment confirmed successfully! Booking is now complete.",
+                    "timestamp": datetime.now().isoformat()
+                }), 200
+
             except Exception as e:
                 log_error(f"Failed to update payment status", e)
-                return jsonify({"error": "Database error"}), 500
+                return jsonify({
+                    "error": "Database error",
+                    "message": "Unable to confirm payment. Please contact us."
+                }), 500
             finally:
                 conn.close()
 
-        return jsonify({
-            "status": "success",
-            "payment_id": payment_id,
-            "message": "Payment confirmed successfully",
-            "timestamp": datetime.now().isoformat()
-        }), 200
-
     except Exception as e:
         log_error("Error confirming payment", e)
-        return jsonify({"error": f"Payment confirmation failed: {str(e)}"}), 500
+        return jsonify({
+            "error": f"Payment confirmation failed: {str(e)}",
+            "message": "Unable to confirm payment. Please contact us."
+        }), 500
 
 @app.route('/api/get-quotes', methods=['GET'])
 def get_quotes():
