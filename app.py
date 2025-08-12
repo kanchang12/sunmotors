@@ -1502,7 +1502,7 @@ def get_wasteking_prices_from_api():
         return jsonify({"error": f"API request failed: {str(e)}"}), 500
     except Exception as e:
         log_error(f"An unexpected error occurred: {e}", e)
-        return jsonify({"error": "An unexpected error occurred."}), 500', methods=['GET'])
+        
 def elevenlabs_get_wasteking_prices():
     """ElevenLabs webhook for WasteKing pricing"""
     log_with_timestamp("📞 ElevenLabs called WasteKing endpoint")
