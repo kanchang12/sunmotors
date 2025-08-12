@@ -1827,6 +1827,9 @@ def request_payment():
         customer_phone = data.get('customer_phone', 'Unknown')
         call_sid = data.get('call_sid')  # Get current call SID from ElevenLabs
 
+        # Generate payment ID first
+        payment_id = str(uuid.uuid4())
+        
         log_with_timestamp(f"💳 Braintree payment request for quote: {quote_id}, amount: {amount}, call_sid: {call_sid}")
 
         if not quote_id or not amount:
@@ -1840,9 +1843,6 @@ def request_payment():
             log_with_timestamp(f"⚠️ Warning: No call_sid provided for payment {payment_id}")
             # For now, continue without call transfer - just create payment record
             call_sid = "pending_from_elevenlabs"
-
-        # Generate payment ID
-        payment_id = str(uuid.uuid4())
 
         # Store payment request in database
         with db_lock:
