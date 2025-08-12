@@ -41,12 +41,15 @@ DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
 # OpenAI API
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 
-# WasteKing API Configuration
+# WasteKing API Configuration - FIXED
 WASTEKING_EMAIL = os.getenv('WASTEKING_EMAIL', 'kanchan.ghosh@wasteking.co.uk')
 WASTEKING_PASSWORD = os.getenv('WASTEKING_PASSWORD', 'T^269725365789ad')
 WASTEKING_BASE_URL = "https://wk-smp-api-dev.azurewebsites.net/"
-WASTEKING_ACCESS_TOKEN = "wk-KZPY-tGF-@d.Aby9fpvMCVVWkX-GN.i7jCBhF3xceoFfhmawaNc.RH.G-kwk8"
+WASTEKING_ACCESS_TOKEN = "wk-KZPY-tGF-@d.Aby9fpvMC_VVWkX-GN.i7jCBhF3xceoFfhmawaNc.RH.G_-kwk8"
 WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-breakdown/"
+
+# PayPal Configuration
+PAYPAL_PAYMENT_URL = "https://www.paypal.com/ncp/payment/BQ82GUU9VSKYN"
 
 # Database configuration
 DATABASE_FILE = 'calls.db'
@@ -164,6 +167,38 @@ def init_db():
                 summary_translation TEXT
             )
         ''')
+        
+        # Add new tables for price quotes and payments
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS price_quotes (
+                quote_id TEXT PRIMARY KEY,
+                booking_ref TEXT,
+                postcode TEXT,
+                service TEXT,
+                price_data TEXT,
+                created_at TEXT,
+                status TEXT DEFAULT 'pending',
+                customer_phone TEXT,
+                agent_name TEXT
+            )
+        ''')
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS payments (
+                payment_id TEXT PRIMARY KEY,
+                quote_id TEXT,
+                booking_ref TEXT,
+                amount REAL,
+                currency TEXT DEFAULT 'GBP',
+                paypal_url TEXT,
+                payment_status TEXT DEFAULT 'pending',
+                created_at TEXT,
+                paid_at TEXT,
+                customer_phone TEXT,
+                FOREIGN KEY (quote_id) REFERENCES price_quotes (quote_id)
+            )
+        ''')
+        
         conn.commit()
         conn.close()
         log_with_timestamp("Database initialized successfully")
@@ -1428,92 +1463,306 @@ def get_calls_list():
             }
         })
 
-# --- ElevenLabs Endpoints ---
+# --- PRICING AND PAYMENT ENDPOINTS ---
+
 @app.route('/api/get-wasteking-prices', methods=['POST'])
 def get_wasteking_prices_from_api():
     """
     Handles requests from Eleven Labs, fetches live pricing from WasteKing
-    via a three-step API process: create booking, update with search, and
-    fetch price from webhook.
     """
+    log_with_timestamp("📞 ElevenLabs called WasteKing price endpoint")
+    
     try:
         data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+            
         postcode = data.get('postcode')
         service = data.get('service')
         
+        log_with_timestamp(f"🔍 Price request - Postcode: {postcode}, Service: {service}")
+        
         if not postcode or not service:
-            return jsonify({"error": "Postcode and service are required"}), 400
+            return jsonify({
+                "error": "Postcode and service are required",
+                "required_fields": ["postcode", "service"]
+            }), 400
 
-        # Headers for all WasteKing API calls
+        # Headers for WasteKing API calls
         headers = {
             "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
             "Content-Type": "application/json"
         }
 
+        log_with_timestamp("📝 Step 1: Creating booking reference...")
+
         # Step 1: Create a BookingRef
-        create_url = f"{WASTEKING_API_URL}/api/booking/create/"
+        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
         create_payload = {
             "type": "chatbot",
             "source": "wasteking.co.uk"
         }
-        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=10)
-        create_response.raise_for_status()
-        booking_ref = create_response.json().get('bookingRef')
+        
+        log_with_timestamp(f"🌐 POST {create_url}")
+        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15)
+        
+        log_with_timestamp(f"📊 Create response: {create_response.status_code}")
+        
+        if create_response.status_code != 200:
+            log_with_timestamp(f"❌ Create failed: {create_response.text}")
+            return jsonify({
+                "error": f"Failed to create booking: {create_response.status_code}",
+                "details": create_response.text
+            }), 500
+
+        create_data = create_response.json()
+        booking_ref = create_data.get('bookingRef')
 
         if not booking_ref:
-            return jsonify({"error": "Failed to create booking reference"}), 500
+            log_with_timestamp(f"❌ No bookingRef in response: {create_data}")
+            return jsonify({"error": "Failed to get booking reference"}), 500
+
+        log_with_timestamp(f"✅ Got booking ref: {booking_ref}")
+        log_with_timestamp("📝 Step 2: Updating booking with search...")
 
         # Step 2: Update the booking to perform a search
-        update_url = f"{WASTEKING_API_URL}/api/booking/update/"
+        update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
         update_payload = {
             "bookingRef": booking_ref,
-            "postcode": postcode,
-            "service": service
+            "search": {
+                "postCode": postcode,
+                "service": service
+            }
         }
-        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=15)
-        update_response.raise_for_status()
-        result_items = update_response.json().get('resultItems', [])
-
-        if not result_items:
-            return jsonify({"message": "No results found for this search criteria"}), 404
         
-        # Step 3: Fetch the actual price from the webhook
-        # We take the first result's webhook URL as it's typically the primary option
-        webhook_url = result_items[0].get('webhook')
-        if not webhook_url:
-            return jsonify({"error": "No webhook URL found in the search results"}), 500
+        log_with_timestamp(f"🌐 POST {update_url}")
+        log_with_timestamp(f"📦 Payload: {update_payload}")
+        
+        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20)
+        
+        log_with_timestamp(f"📊 Update response: {update_response.status_code}")
+        
+        if update_response.status_code != 200:
+            log_with_timestamp(f"❌ Update failed: {update_response.text}")
+            return jsonify({
+                "error": f"Search failed: {update_response.status_code}",
+                "details": update_response.text,
+                "bookingRef": booking_ref
+            }), 500
 
-        price_response = requests.get(webhook_url, timeout=10)
-        price_response.raise_for_status()
-        price_data = price_response.json()
+        update_data = update_response.json()
+        log_with_timestamp(f"✅ Search completed: {update_data}")
+
+        # Store the quote in database
+        quote_id = str(uuid.uuid4())
+        customer_phone = data.get('customer_phone', 'Unknown')
+        agent_name = data.get('agent_name', 'Agent')
+
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    quote_id, booking_ref, postcode, service, json.dumps(update_data), 
+                    datetime.now().isoformat(), customer_phone, agent_name
+                ))
+                conn.commit()
+                log_with_timestamp(f"📝 Stored quote {quote_id} in database")
+            except Exception as e:
+                log_error(f"Failed to store quote in database", e)
+            finally:
+                conn.close()
 
         return jsonify({
             "status": "success",
+            "quote_id": quote_id,
             "bookingRef": booking_ref,
-            "pricing": price_data
+            "search_results": update_data,
+            "postcode": postcode,
+            "service": service,
+            "timestamp": datetime.now().isoformat(),
+            "message": "Price quote generated successfully. Agent will ask customer about payment."
         }), 200
 
+    except requests.exceptions.Timeout:
+        log_error("WasteKing API timeout")
+        return jsonify({"error": "API timeout - please try again"}), 504
     except requests.exceptions.RequestException as e:
-        # Catch network errors, timeouts, and bad HTTP status codes
+        log_error("WasteKing API request failed", e)
         return jsonify({"error": f"API request failed: {str(e)}"}), 500
     except Exception as e:
-        # Catch any other unexpected errors
-        return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
-        
-def elevenlabs_get_wasteking_prices():
-    """ElevenLabs webhook for WasteKing pricing"""
-    log_with_timestamp("📞 ElevenLabs called WasteKing endpoint")
+        log_error("Unexpected error in WasteKing API", e)
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
+@app.route('/api/request-payment', methods=['POST'])
+def request_payment():
+    """
+    Creates payment request and returns PayPal link
+    Called when agent asks customer if they want to proceed with payment
+    """
+    log_with_timestamp("💳 Payment request received")
     
     try:
-        result = get_wasteking_prices()
-        return jsonify(result)
-    except Exception as e:
-        log_error("Error in ElevenLabs endpoint", e)
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        quote_id = data.get('quote_id')
+        amount = data.get('amount')
+        currency = data.get('currency', 'GBP')
+        customer_phone = data.get('customer_phone', 'Unknown')
+
+        if not quote_id or not amount:
+            return jsonify({
+                "error": "Quote ID and amount are required",
+                "required_fields": ["quote_id", "amount"]
+            }), 400
+
+        # Generate payment ID
+        payment_id = str(uuid.uuid4())
+
+        # Store payment request in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                # Get quote details
+                cursor.execute("SELECT booking_ref FROM price_quotes WHERE quote_id = ?", (quote_id,))
+                quote_row = cursor.fetchone()
+                
+                if not quote_row:
+                    return jsonify({"error": "Quote not found"}), 404
+
+                booking_ref = quote_row[0]
+
+                # Insert payment request
+                cursor.execute('''
+                    INSERT INTO payments (payment_id, quote_id, booking_ref, amount, currency, paypal_url, created_at, customer_phone)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    payment_id, quote_id, booking_ref, float(amount), currency, 
+                    PAYPAL_PAYMENT_URL, datetime.now().isoformat(), customer_phone
+                ))
+                conn.commit()
+                log_with_timestamp(f"💳 Created payment request {payment_id}")
+
+            except Exception as e:
+                log_error(f"Failed to create payment request", e)
+                return jsonify({"error": "Database error"}), 500
+            finally:
+                conn.close()
+
         return jsonify({
-            "error": "Internal server error",
-            "status": "error",
+            "status": "success",
+            "payment_id": payment_id,
+            "quote_id": quote_id,
+            "amount": float(amount),
+            "currency": currency,
+            "paypal_url": PAYPAL_PAYMENT_URL,
+            "message": f"Please send this PayPal link to the customer: {PAYPAL_PAYMENT_URL}",
             "timestamp": datetime.now().isoformat()
-        }), 500
+        }), 200
+
+    except Exception as e:
+        log_error("Error creating payment request", e)
+        return jsonify({"error": f"Payment request failed: {str(e)}"}), 500
+
+@app.route('/api/confirm-payment', methods=['POST'])
+def confirm_payment():
+    """
+    Confirms payment completion
+    Called when customer has completed payment
+    """
+    log_with_timestamp("✅ Payment confirmation received")
+    
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        payment_id = data.get('payment_id')
+        
+        if not payment_id:
+            return jsonify({"error": "Payment ID is required"}), 400
+
+        # Update payment status
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    UPDATE payments 
+                    SET payment_status = 'completed', paid_at = ?
+                    WHERE payment_id = ?
+                ''', (datetime.now().isoformat(), payment_id))
+                
+                if cursor.rowcount == 0:
+                    return jsonify({"error": "Payment not found"}), 404
+
+                # Also update the quote status
+                cursor.execute('''
+                    UPDATE price_quotes 
+                    SET status = 'paid'
+                    WHERE quote_id = (SELECT quote_id FROM payments WHERE payment_id = ?)
+                ''', (payment_id,))
+
+                conn.commit()
+                log_with_timestamp(f"✅ Payment {payment_id} marked as completed")
+
+            except Exception as e:
+                log_error(f"Failed to update payment status", e)
+                return jsonify({"error": "Database error"}), 500
+            finally:
+                conn.close()
+
+        return jsonify({
+            "status": "success",
+            "payment_id": payment_id,
+            "message": "Payment confirmed successfully",
+            "timestamp": datetime.now().isoformat()
+        }), 200
+
+    except Exception as e:
+        log_error("Error confirming payment", e)
+        return jsonify({"error": f"Payment confirmation failed: {str(e)}"}), 500
+
+@app.route('/api/get-quotes', methods=['GET'])
+def get_quotes():
+    """Get all quotes and their payment status"""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT q.quote_id, q.booking_ref, q.postcode, q.service, q.created_at, 
+                       q.status, q.customer_phone, q.agent_name,
+                       p.payment_id, p.amount, p.currency, p.payment_status, p.paid_at
+                FROM price_quotes q
+                LEFT JOIN payments p ON q.quote_id = p.quote_id
+                ORDER BY q.created_at DESC
+            ''')
+            
+            quotes = []
+            for row in cursor.fetchall():
+                quote = dict(row)
+                quotes.append(quote)
+            
+            conn.close()
+            
+            return jsonify({
+                "status": "success",
+                "quotes": quotes,
+                "count": len(quotes),
+                "timestamp": datetime.now().isoformat()
+            })
+
+    except Exception as e:
+        log_error("Error fetching quotes", e)
+        return jsonify({"error": f"Failed to fetch quotes: {str(e)}"}), 500
 
 @app.route('/api/setup-wasteking', methods=['POST'])
 def setup_wasteking_session():
