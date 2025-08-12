@@ -44,7 +44,8 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 # WasteKing API Configuration
 WASTEKING_EMAIL = os.getenv('WASTEKING_EMAIL', 'kanchan.ghosh@wasteking.co.uk')
 WASTEKING_PASSWORD = os.getenv('WASTEKING_PASSWORD', 'T^269725365789ad')
-WASTEKING_BASE_URL = "https://wk-smp-api-dev.azurewebsites.net/"
+WASTEKING_API_URL = "https://wk-smp-api-dev.azurewebsites.net/"
+WASTEKING_ACCESS_TOKEN = "wk-KZPY-tGF-@d.Aby9fpvMCVVWkX-GN.i7jCBhF3xceoFfhmawaNc.RH.G-kwk8"
 WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-breakdown/"
 
 # Database configuration
@@ -1428,7 +1429,80 @@ def get_calls_list():
         })
 
 # --- ElevenLabs Endpoints ---
-@app.route('/api/get-wasteking-prices', methods=['GET'])
+@app.route('@app.route('/api/get-wasteking-prices', methods=['POST'])
+def get_wasteking_prices_from_api():
+    """
+    Handles requests from Eleven Labs, fetches live pricing from WasteKing via a three-step API process.
+    """
+    try:
+        data = request.json
+        postcode = data.get('postcode')
+        service = data.get('service')
+        
+        if not postcode or not service:
+            return jsonify({"error": "Postcode and service are required"}), 400
+
+        # Headers for all WasteKing API calls
+        headers = {
+            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        # Step 1: Create a BookingRef
+        log_with_timestamp("Step 1: Creating a new booking reference...")
+        create_url = f"{WASTEKING_API_URL}/api/booking/create/"
+        create_payload = {
+            "type": "chatbot",
+            "source": "wasteking.co.uk"
+        }
+        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=10)
+        create_response.raise_for_status()
+        booking_ref = create_response.json().get('bookingRef')
+
+        if not booking_ref:
+            return jsonify({"error": "Failed to create booking reference"}), 500
+        log_with_timestamp(f"✅ Booking reference created: {booking_ref}")
+
+        # Step 2: Update the booking to perform a search
+        log_with_timestamp("Step 2: Performing search for pricing...")
+        update_url = f"{WASTEKING_API_URL}/api/booking/update/"
+        update_payload = {
+            "bookingRef": booking_ref,
+            "postcode": postcode,
+            "service": service
+        }
+        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=15)
+        update_response.raise_for_status()
+        result_items = update_response.json().get('resultItems', [])
+
+        if not result_items:
+            return jsonify({"message": "No results found for this search criteria"}), 404
+        
+        # Extract the webhook from the first result item to get the price
+        # Assuming the first item is the most relevant
+        webhook_url = result_items[0].get('webhook')
+        if not webhook_url:
+            return jsonify({"error": "No webhook URL found in the search results"}), 500
+
+        # Step 3: Fetch the actual price from the webhook
+        log_with_timestamp("Step 3: Fetching final price from webhook...")
+        price_response = requests.get(webhook_url, timeout=10)
+        price_response.raise_for_status()
+        price_data = price_response.json()
+
+        log_with_timestamp("✅ Price data successfully fetched.")
+        return jsonify({
+            "status": "success",
+            "bookingRef": booking_ref,
+            "pricing": price_data
+        }), 200
+
+    except requests.exceptions.RequestException as e:
+        log_error(f"API request failed during pricing process: {e}", e)
+        return jsonify({"error": f"API request failed: {str(e)}"}), 500
+    except Exception as e:
+        log_error(f"An unexpected error occurred: {e}", e)
+        return jsonify({"error": "An unexpected error occurred."}), 500', methods=['GET'])
 def elevenlabs_get_wasteking_prices():
     """ElevenLabs webhook for WasteKing pricing"""
     log_with_timestamp("📞 ElevenLabs called WasteKing endpoint")
