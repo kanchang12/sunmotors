@@ -1728,13 +1728,13 @@ def get_wasteking_prices_from_api():
             "skips": "skip",
             "skip rental": "skip",
             
-            # Man & Van variations - FIXED to handle ampersand properly
-            "man and van": "man-in-van",
-            "man in van": "man-in-van", 
-            "man & van": "man-in-van",  # This handles the ampersand version
-            "van": "man-in-van",
-            "man with van": "man-in-van",
-            "removal van": "man-in-van",
+            # Man & Van variations - Keep as "Man & Van" (with ampersand)
+            "man and van": "Man & Van",
+            "man in van": "Man & Van", 
+            "man & van": "Man & Van",  # Keep the ampersand version
+            "van": "Man & Van",
+            "man with van": "Man & Van",
+            "removal van": "Man & Van",
             
             # Grab Hire variations
             "grab hire": "grab",
@@ -2177,20 +2177,97 @@ def payment_callback(payment_id):
         conn = sqlite3.connect('calls.db')
         cursor = conn.cursor()
         
-        # Update payment_status (not status)
+        # Get payment and quote details
+        cursor.execute('''
+            SELECT p.quote_id, p.customer_phone, p.amount, q.booking_ref, q.postcode, q.service, q.customer_phone as quote_phone
+            FROM payments p
+            LEFT JOIN price_quotes q ON p.quote_id = q.quote_id
+            WHERE p.payment_id = ?
+        ''', (payment_id,))
+        
+        payment_details = cursor.fetchone()
+        
+        if not payment_details:
+            print(f"❌ Payment details not found for {payment_id}")
+            return '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Payment processed. Thank you for choosing Waste King.</Say>
+    <Hangup/>
+</Response>''', 200, {'Content-Type': 'application/xml'}
+        
+        quote_id, customer_phone, amount, booking_ref, postcode, service, quote_phone = payment_details
+        
+        # Use quote_phone if payment phone not available
+        if not customer_phone:
+            customer_phone = quote_phone
+        
+        # Update payment_status
         cursor.execute(
             "UPDATE payments SET payment_status = ?, paid_at = datetime('now') WHERE payment_id = ?",
             (payment_status, payment_id)
         )
+        
+        # Update quote status
+        cursor.execute(
+            "UPDATE price_quotes SET status = ? WHERE quote_id = ?",
+            ('paid' if payment_status in ['completed', 'success'] else 'failed', quote_id)
+        )
+        
         conn.commit()
         conn.close()
         
         if payment_status == 'completed' or payment_status == 'success':
             print(f"✅ Payment {payment_id} successful")
             
+            # Send confirmation SMS with booking details
+            if customer_phone and TWILIO_PHONE_NUMBER and TWILIO_PHONE_NUMBER != 'your_twilio_phone_number':
+                try:
+                    client = get_twilio_client()
+                    if client:
+                        # Clean phone number
+                        clean_phone = clean_phone_number(customer_phone)
+                        
+                        if clean_phone:
+                            # Create confirmation SMS
+                            confirmation_message = f"""✅ BOOKING CONFIRMED - Waste King
+
+Booking ID: {booking_ref}
+Service: {service}
+Location: {postcode}
+Amount Paid: £{amount}
+
+Your waste collection is confirmed! 
+
+We'll contact you soon to arrange collection time.
+
+Thank you for choosing Waste King!
+Questions? Call: 0800 123 4567"""
+
+                            # Send confirmation SMS
+                            message = client.messages.create(
+                                body=confirmation_message,
+                                from_=TWILIO_PHONE_NUMBER,
+                                to=clean_phone
+                            )
+                            
+                            print(f"✅ Confirmation SMS sent: {message.sid}")
+                            
+                            # Store confirmation SMS in database
+                            conn = sqlite3.connect('calls.db')
+                            cursor = conn.cursor()
+                            cursor.execute('''
+                                INSERT INTO sms_payments (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link, payment_status)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ''', (quote_id, clean_phone, float(amount), message.sid, datetime.now().isoformat(), 'CONFIRMATION_SMS', 'confirmed'))
+                            conn.commit()
+                            conn.close()
+                            
+                except Exception as e:
+                    print(f"❌ Failed to send confirmation SMS: {e}")
+            
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Payment completed successfully. Connecting you back to Thomas to finalize your booking.</Say>
+    <Say voice="alice">Payment completed successfully. Booking confirmation sent to your phone.</Say>
     <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
 </Response>''', 200, {'Content-Type': 'application/xml'}
         
@@ -2199,7 +2276,7 @@ def payment_callback(payment_id):
             
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Payment could not be processed. Connecting you back to Thomas for assistance.</Say>
+    <Say voice="alice">Payment could not be processed. Please contact us for assistance.</Say>
     <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
 </Response>''', 200, {'Content-Type': 'application/xml'}
             
@@ -2208,7 +2285,7 @@ def payment_callback(payment_id):
         
         return '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Technical issue occurred. Connecting you back to Thomas.</Say>
+    <Say voice="alice">Technical issue occurred. Please contact us for assistance.</Say>
     <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
 </Response>''', 200, {'Content-Type': 'application/xml'}
 
