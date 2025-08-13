@@ -1035,13 +1035,15 @@ Transcript: {transcript}"""
         return None
 
 def categorize_call(transcript: str) -> str:
-    """Categorize calls based on keywords"""
+    """Categorize calls based on keywords - FIXED to include collections"""
     transcript_lower = transcript.lower()
     
-    if "skip" in transcript_lower:
-        return "SKIP"
-    if any(word in transcript_lower for word in ["van", "driver", "collection", "man and van", "man & van"]):
+    if "skip" in transcript_lower or "hire" in transcript_lower:
+        return "skip"
+    if any(word in transcript_lower for word in ["van", "driver", "man and van", "man & van"]):
         return "mav"
+    if any(word in transcript_lower for word in ["collection", "collect", "pickup", "pick up"]):
+        return "collections"  # ADDED: Collections category
     if "complaint" in transcript_lower or "unhappy" in transcript_lower or "dissatisfied" in transcript_lower:
         return "complaint"
     return "general enquiry"
@@ -1260,6 +1262,69 @@ def clean_phone_number(phone_number: str) -> str:
     
     return clean_phone
 
+def send_sms_payment(quote_id: str, customer_phone: str, amount: str):
+    """Send payment SMS - WORKING VERSION"""
+    try:
+        # Clean phone number
+        clean_phone = clean_phone_number(customer_phone)
+        if not clean_phone:
+            raise Exception(f"Invalid phone number: {customer_phone}")
+
+        # Check Twilio configuration
+        if not TWILIO_PHONE_NUMBER or TWILIO_PHONE_NUMBER == 'your_twilio_phone_number':
+            raise Exception("Twilio phone number not configured")
+
+        # Get Twilio client
+        client = get_twilio_client()
+        if not client:
+            raise Exception("Twilio client initialization failed")
+
+        # Create SMS message
+        message_body = f"""Waste King Payment
+Amount: £{amount}
+Quote: {quote_id}
+
+Pay securely via PayPal:
+{PAYPAL_PAYMENT_LINK}
+
+After payment, you'll get confirmation.
+Thank you!"""
+
+        # Send SMS
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=clean_phone
+        )
+        
+        log_with_timestamp(f"✅ SMS sent successfully: {message.sid}")
+        
+        # Store SMS record in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (quote_id, clean_phone, float(amount), message.sid, datetime.now().isoformat(), PAYPAL_PAYMENT_LINK))
+            conn.commit()
+            conn.close()
+        
+        return {
+            "success": True,
+            "sms_sid": message.sid,
+            "phone_number": clean_phone,
+            "message": f"Payment link sent to {customer_phone}"
+        }
+        
+    except Exception as e:
+        log_error(f"SMS sending failed for quote {quote_id}", e)
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Failed to send SMS"
+        }
+
 def send_confirmation_sms(quote_id: str):
     """Send automatic booking confirmation SMS"""
     try:
@@ -1434,9 +1499,9 @@ def get_dashboard_data():
             "follow_up_next_steps": round(avg_resolution_subs[3] or 0, 2),
         }
 
-        # Category ratings - FIXED to include "Man & Van"
+        # Category ratings - FIXED to include collections
         category_ratings = {}
-        categories = ["SKIP", "Man & Van", "general enquiry", "complaint"] 
+        categories = ["skip", "mav", "collections", "general enquiry", "complaint"] 
         for cat in categories:
             cursor.execute("SELECT AVG(openai_overall_score), COUNT(*) FROM calls WHERE category = ?", (cat,))
             result = cursor.fetchone()
@@ -1563,20 +1628,29 @@ def get_calls_list():
 
 # --- PRICING AND PAYMENT ENDPOINTS ---
 
-# URGENT FIX - Replace the get_wasteking_prices_from_api function with this:
-
 @app.route('/api/get-wasteking-prices', methods=['POST'])
 def get_wasteking_prices_from_api():
-    """
-    FIXED: Proper response format for ElevenLabs - no more call disconnections
-    """
+    """Get WasteKing pricing - FIXED service mapping and SMS endpoint"""
     log_with_timestamp("📞 ElevenLabs called WasteKing price endpoint")
     
     try:
-        data = request.json
+        # Handle different content types
+        data = None
+        if request.is_json and request.json:
+            data = request.json
+        elif request.form:
+            data = request.form.to_dict()
+        elif request.args:
+            data = request.args.to_dict()
+        
         if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-            
+            return jsonify({
+                "status": "error",
+                "message": "No data provided. Please provide postcode and service.",
+                "quote_id": generate_short_id("WK"),
+                "timestamp": datetime.now().isoformat()
+            }), 200
+
         postcode = data.get('postcode')
         service = data.get('service', '').strip()
         
@@ -1584,130 +1658,103 @@ def get_wasteking_prices_from_api():
         
         if not postcode or not service:
             return jsonify({
-                "error": "Postcode and service are required",
-                "required_fields": ["postcode", "service"]
-            }), 400
+                "status": "error",
+                "message": "Postcode and service are required",
+                "quote_id": generate_short_id("WK"),
+                "timestamp": datetime.now().isoformat()
+            }), 200
 
-        # Clean and validate postcode format
+        # Clean and validate postcode
         postcode_clean = postcode.upper().replace(' ', '')
-        
-        # Basic UK postcode validation
         uk_postcode_pattern = r'^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$'
         
         if not re.match(uk_postcode_pattern, postcode_clean):
-            log_with_timestamp(f"❌ Invalid postcode format: {postcode}")
             return jsonify({
                 "status": "error",
-                "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED' or 'M1 1AA'.",
+                "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED'.",
                 "quote_id": generate_short_id("WK"),
                 "timestamp": datetime.now().isoformat()
-            }), 200  # ALWAYS 200 for ElevenLabs
+            }), 200
 
-        # Re-format postcode properly (add space if missing)
+        # Re-format postcode properly
         if len(postcode_clean) >= 5:
             postcode = f"{postcode_clean[:-3]} {postcode_clean[-3:]}"
-        else:
-            postcode = postcode_clean
 
-        # Headers for WasteKing API calls
-        headers = {
-            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
-            "Content-Type": "application/json"
-        }
-
-        log_with_timestamp("📝 Step 1: Creating booking reference...")
-
-        # Step 1: Create a BookingRef
-        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
-        create_payload = {
-            "type": "chatbot",
-            "source": "wasteking.co.uk"
-        }
-        
-        log_with_timestamp(f"🌐 POST {create_url}")
-        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15, verify=False)
-        
-        log_with_timestamp(f"📊 Create response: {create_response.status_code}")
-        
-        if create_response.status_code != 200:
-            log_with_timestamp(f"❌ Create failed: {create_response.text}")
-            return jsonify({
-                "status": "error",
-                "message": "Unable to get pricing at this time. Please contact us directly on 0800 123 4567.",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200  # ALWAYS 200 for ElevenLabs
-
-        create_data = create_response.json()
-        booking_ref = create_data.get('bookingRef')
-
-        if not booking_ref:
-            log_with_timestamp(f"❌ No bookingRef in response: {create_data}")
-            return jsonify({
-                "status": "error",
-                "message": "System error occurred. Please contact us directly on 0800 123 4567.",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200  # ALWAYS 200 for ElevenLabs
-
-        log_with_timestamp(f"✅ Got booking ref: {booking_ref}")
-        log_with_timestamp("📝 Step 2: Updating booking with search...")
-
-        # Step 2: Enhanced service mapping
+        # FIXED service mapping - Use correct WasteKing API values
         service_lower = service.lower().strip()
-        log_with_timestamp(f"🔍 Processing service: '{service}' → '{service_lower}'")
-        
-        # ENHANCED service mapping - FIXED Man & Van recognition
         service_mapping = {
-            # Skip Hire variations
+            # Skip Hire
             "skip hire": "skip",
             "skip": "skip",
             "skips": "skip",
             "skip rental": "skip",
             "hire skip": "skip",
             
-            # Man & Van variations - CRITICAL: Keep as "Man & Van" with ampersand
-            "man and van": "Man & Van",
-            "man in van": "Man & Van", 
-            "man & van": "Man & Van",  
-            "man with van": "Man & Van",
-            "man o van": "Man & Van",  # Handle "man O van"
-            "man-and-van": "Man & Van",
-            "van": "Man & Van",
-            "van service": "Man & Van",
-            "van collection": "Man & Van",
-            "removal van": "Man & Van",
-            "driver and van": "Man & Van",
-            "guy with van": "Man & Van",
-            "man van": "Man & Van",
-            "van man": "Man & Van",
+            # Man & Van - FIXED: Use "mav"
+            "man and van": "mav",
+            "man in van": "mav", 
+            "man & van": "mav",  
+            "man with van": "mav",
+            "van": "mav",
+            "van service": "mav",
+            "van collection": "mav",
+            "man van": "mav",
             
-            # Grab Hire variations
+            # Grab Hire
             "grab hire": "grab",
             "grab": "grab",
             "grab lorry": "grab",
-            "grab truck": "grab",
             
-            # Clearance variations
+            # Collections - ADDED
+            "collection": "collections",
+            "collections": "collections",
+            "waste collection": "collections",
+            "rubbish collection": "collections",
+            
+            # Clearance
             "house clearance": "clearance",
-            "office clearance": "clearance",
             "clearance": "clearance",
             "property clearance": "clearance",
-            "house clear": "clearance",
-            "office clear": "clearance",
-            
-            # Waste removal general
-            "waste removal": "removal",
-            "removal": "removal",
-            "rubbish removal": "removal",
-            "rubbish collection": "removal",
-            "waste collection": "removal",
         }
         
-        # Convert service name with intelligent fallbacks
         wasteking_service = service_mapping.get(service_lower, service_lower)
         log_with_timestamp(f"🔄 Mapped service '{service}' → '{wasteking_service}' for postcode {postcode}")
+
+        # Headers for WasteKing API
+        headers = {
+            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        # Step 1: Create booking reference
+        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
+        create_payload = {
+            "type": "chatbot",
+            "source": "wasteking.co.uk"
+        }
         
+        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15, verify=False)
+        
+        if create_response.status_code != 200:
+            return jsonify({
+                "status": "error",
+                "message": "Unable to get pricing at this time. Please contact us directly.",
+                "quote_id": generate_short_id("WK"),
+                "timestamp": datetime.now().isoformat()
+            }), 200
+
+        create_data = create_response.json()
+        booking_ref = create_data.get('bookingRef')
+
+        if not booking_ref:
+            return jsonify({
+                "status": "error",
+                "message": "System error occurred. Please contact us directly.",
+                "quote_id": generate_short_id("WK"),
+                "timestamp": datetime.now().isoformat()
+            }), 200
+
+        # Step 2: Update booking with search
         update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
         update_payload = {
             "bookingRef": booking_ref,
@@ -1717,48 +1764,30 @@ def get_wasteking_prices_from_api():
             }
         }
         
-        log_with_timestamp(f"🌐 POST {update_url}")
-        log_with_timestamp(f"📦 Payload: {update_payload}")
-        
         update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20, verify=False)
-        
-        log_with_timestamp(f"📊 Update response: {update_response.status_code}")
         update_data = update_response.json()
-        log_with_timestamp(f"📄 Update response body: {update_data}")
 
-        # Generate SHORT quote ID
-        quote_id = generate_short_id("WK")  # WK123456 format
+        # Generate quote ID and store
+        quote_id = generate_short_id("WK")
         customer_phone = data.get('customer_phone', 'Unknown')
         agent_name = data.get('agent_name', 'Thomas')
-        call_sid = data.get('call_sid', '')
-        conversation_id = data.get('conversation_id', '')
 
-        log_with_timestamp(f"✅ Generated SHORT quote ID: {quote_id}")
-
-        # Store the quote in database
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status, call_sid, elevenlabs_conversation_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    quote_id, booking_ref, postcode, wasteking_service, json.dumps(update_data), 
-                    datetime.now().isoformat(), customer_phone, agent_name, 
-                    'no_results' if update_response.status_code != 200 else 'pending',
-                    call_sid, conversation_id
-                ))
-                conn.commit()
-                log_with_timestamp(f"📝 Stored quote {quote_id} in database")
-            except Exception as e:
-                log_error(f"Failed to store quote in database", e)
-            finally:
-                conn.close()
+            cursor.execute('''
+                INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                quote_id, booking_ref, postcode, wasteking_service, json.dumps(update_data), 
+                datetime.now().isoformat(), customer_phone, agent_name, 
+                'no_results' if update_response.status_code != 200 else 'pending'
+            ))
+            conn.commit()
+            conn.close()
 
-        # FIXED: Always return status "success" with clear messages for ElevenLabs
+        # Return response
         if update_response.status_code == 200:
-            # Success case - has pricing
             return jsonify({
                 "status": "success",
                 "quote_id": quote_id,
@@ -1771,244 +1800,128 @@ def get_wasteking_prices_from_api():
                 "service": wasteking_service,
                 "timestamp": datetime.now().isoformat()
             }), 200
-            
         else:
-            # No results - but don't make the call fail
             return jsonify({
                 "status": "success",
                 "quote_id": quote_id,
-                "message": f"I'm sorry, we don't currently offer {wasteking_service} service in {postcode}. However, let me check what other services we have available in your area. Can you try a nearby postcode or would you like me to transfer you to our specialist team?",
+                "message": f"I'm sorry, we don't currently offer {wasteking_service} service in {postcode}. Let me transfer you to our specialist team.",
                 "has_pricing": False,
                 "pricing_available": False,
-                "suggestions": [
-                    f"We may offer other services in {postcode}",
-                    "Try a nearby postcode in the same area", 
-                    "Contact our specialist team for arrangements"
-                ],
-                "bookingRef": booking_ref,
-                "postcode": postcode,
-                "service": wasteking_service,
+                "should_transfer": True,
                 "timestamp": datetime.now().isoformat()
-            }), 200  # ALWAYS 200 - never fail the call
+            }), 200
 
-    except requests.exceptions.Timeout:
-        log_error("WasteKing API timeout")
-        return jsonify({
-            "status": "success",
-            "quote_id": generate_short_id("WK"),
-            "message": "Our pricing system is temporarily busy. Let me transfer you to our team who can give you a quote directly.",
-            "has_pricing": False,
-            "should_transfer": True,
-            "timestamp": datetime.now().isoformat()
-        }), 200  # ALWAYS 200
-        
-    except requests.exceptions.RequestException as e:
-        log_error("WasteKing API request failed", e)
-        return jsonify({
-            "status": "success", 
-            "quote_id": generate_short_id("WK"),
-            "message": "Let me transfer you to our team who can help you with pricing and booking.",
-            "has_pricing": False,
-            "should_transfer": True,
-            "timestamp": datetime.now().isoformat()
-        }), 200  # ALWAYS 200
-        
     except Exception as e:
-        log_error("Unexpected error in WasteKing API", e)
+        log_error("WasteKing API error", e)
         return jsonify({
             "status": "success",
-            "quote_id": generate_short_id("WK"), 
-            "message": "Let me put you through to our team who can assist you directly.",
+            "quote_id": generate_short_id("WK"),
+            "message": "Let me transfer you to our team who can help you with pricing.",
             "has_pricing": False,
             "should_transfer": True,
             "timestamp": datetime.now().isoformat()
-        }), 200  # ALWAYS 200
+        }), 200
 
-@app.route('/api/debug-request', methods=['POST', 'GET', 'PUT', 'PATCH'])
-def debug_request():
-    """
-    Debug endpoint to see exactly what data is being received
-    """
-    debug_info = {
-        "method": request.method,
-        "content_type": request.content_type,
-        "headers": dict(request.headers),
-        "is_json": request.is_json,
-        "timestamp": datetime.now().isoformat()
-    }
-    
-    # Try to get data in different ways
-    try:
-        if request.is_json and request.json:
-            debug_info["json_data"] = request.json
-    except:
-        debug_info["json_error"] = "Failed to parse JSON"
+# --- SMS PAYMENT ENDPOINT (WORKING VERSION) ---
+@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
+def send_payment_sms():
+    """Send PayPal payment link via SMS - WORKING VERSION"""
+    log_with_timestamp("📱 SMS payment request received")
     
     try:
-        if request.form:
-            debug_info["form_data"] = request.form.to_dict()
-    except:
-        debug_info["form_error"] = "Failed to parse form data"
-    
-    try:
-        if request.args:
-            debug_info["query_params"] = request.args.to_dict()
-    except:
-        debug_info["args_error"] = "Failed to parse query params"
-    
-    try:
-        if request.data:
-            debug_info["raw_data"] = request.data.decode('utf-8')[:500]  # First 500 chars
-    except:
-        debug_info["raw_data_error"] = "Failed to get raw data"
-    
-    log_with_timestamp(f"🔍 Debug request: {debug_info}")
-    
-    return jsonify({
-        "status": "debug_success",
-        "message": "Request received and analyzed",
-        "debug_info": debug_info
-    })
-
-@app.route('/api/test-sms-simple', methods=['GET'])
-def test_sms_simple():
-    """
-    Simple GET endpoint to test SMS with query parameters
-    Usage: /api/test-sms-simple?quote_id=WK123456&customer_phone=+447123456789&amount=25.00
-    """
-    quote_id = request.args.get('quote_id', 'TEST123456')
-    customer_phone = request.args.get('customer_phone')
-    amount = request.args.get('amount', '1.00')
-    
-    if not customer_phone:
-        return jsonify({
-            "error": "customer_phone is required",
-            "usage": "/api/test-sms-simple?quote_id=WK123456&customer_phone=+447123456789&amount=25.00"
-        }), 400
-    
-    # Use the fixed SMS function logic
-    return send_payment_sms_internal(quote_id, customer_phone, amount)
-
-def send_payment_sms_internal(quote_id, customer_phone, amount):
-    """
-    Internal function to send SMS (reusable)
-    """
-    try:
-        # Clean phone number
-        clean_phone = clean_phone_number(customer_phone)
-        if not clean_phone:
+        # Handle different content types
+        data = None
+        
+        if request.method == 'POST':
+            if request.is_json and request.json:
+                data = request.json
+            elif request.form:
+                data = request.form.to_dict()
+            elif request.data:
+                try:
+                    data = json.loads(request.data.decode('utf-8'))
+                except:
+                    pass
+        elif request.method == 'GET':
+            data = request.args.to_dict()
+        
+        if not data:
             return jsonify({
-                "error": "Invalid phone number format",
-                "message": "Please provide a valid phone number."
+                "error": "No data provided",
+                "message": "Please provide quote_id, customer_phone, and amount"
             }), 400
 
-        # Check Twilio configuration
-        if not TWILIO_PHONE_NUMBER or TWILIO_PHONE_NUMBER == 'your_twilio_phone_number':
+        quote_id = data.get('quote_id')
+        customer_phone = data.get('customer_phone')
+        amount = data.get('amount', '25.00')
+        
+        log_with_timestamp(f"📱 SMS request: Quote={quote_id}, Phone={customer_phone}, Amount=£{amount}")
+        
+        if not quote_id or not customer_phone:
             return jsonify({
-                "error": "SMS service not configured",
-                "message": "Twilio phone number not set up"
+                "error": "Quote ID and customer phone are required"
+            }), 400
+
+        # Send SMS using the working function
+        result = send_sms_payment(quote_id, customer_phone, amount)
+        
+        if result['success']:
+            return jsonify({
+                "status": "success",
+                "message": f"Payment link sent to {customer_phone}. Quote: {quote_id}",
+                "sms_sid": result['sms_sid'],
+                "quote_id": quote_id,
+                "amount": amount,
+                "call_continues": True,
+                "timestamp": datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                "error": result['error'],
+                "message": result['message']
             }), 500
 
-        # Get Twilio client
-        client = get_twilio_client()
-        if not client:
-            return jsonify({
-                "error": "SMS service unavailable", 
-                "message": "Twilio client initialization failed"
-            }), 500
-
-        # Create and send SMS
-        message_body = f"""Waste King Payment
-Amount: £{amount}
-Quote: {quote_id}
-
-Pay securely via PayPal:
-{PAYPAL_PAYMENT_LINK}
-
-After payment, you'll get confirmation.
-Thank you!"""
-
-        message = client.messages.create(
-            body=message_body,
-            from_=TWILIO_PHONE_NUMBER,
-            to=clean_phone
-        )
-        
-        log_with_timestamp(f"✅ SMS sent: {message.sid}")
-        
-        # Store in database
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO sms_payments (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (quote_id, clean_phone, float(amount), message.sid, datetime.now().isoformat(), PAYPAL_PAYMENT_LINK))
-            conn.commit()
-            conn.close()
-        
-        return jsonify({
-            "status": "success",
-            "message": f"SMS sent to {clean_phone}",
-            "sms_sid": message.sid,
-            "quote_id": quote_id,
-            "amount": amount
-        })
-        
     except Exception as e:
-        log_error("SMS sending failed", e)
+        log_error("SMS payment error", e)
         return jsonify({
-            "error": f"SMS failed: {str(e)}"
+            "error": f"SMS payment failed: {str(e)}",
+            "message": "Unable to send payment link"
         }), 500
 
-# PAYMENT WEBHOOK (automatic confirmation)
+# --- PAYMENT CONFIRMATION ---
 @app.route('/payment-complete/<quote_id>', methods=['GET', 'POST'])
 def payment_webhook(quote_id):
-    """
-    PayPal webhook - automatically confirms payment WITHOUT call transfer
-    """
+    """PayPal payment webhook"""
     try:
-        log_with_timestamp(f"💳 Payment webhook received for quote {quote_id}")
+        log_with_timestamp(f"💳 Payment webhook for quote {quote_id}")
         
-        # Update quote status automatically
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
             
-            # Update quote status
-            cursor.execute(
-                "UPDATE price_quotes SET status = 'paid' WHERE quote_id = ?",
-                (quote_id,)
-            )
-            
-            # Update SMS payment status
-            cursor.execute(
-                "UPDATE sms_payments SET payment_status = 'completed', paid_at = ? WHERE quote_id = ?",
-                (datetime.now().isoformat(), quote_id)
-            )
+            cursor.execute("UPDATE price_quotes SET status = 'paid' WHERE quote_id = ?", (quote_id,))
+            cursor.execute("UPDATE sms_payments SET payment_status = 'completed', paid_at = ? WHERE quote_id = ?", 
+                         (datetime.now().isoformat(), quote_id))
             
             conn.commit()
             conn.close()
         
-        # Send confirmation SMS automatically
         send_confirmation_sms(quote_id)
-        
-        log_with_timestamp(f"✅ Payment confirmed for {quote_id} - booking complete")
         
         return jsonify({
             "status": "confirmed", 
             "booking_complete": True,
-            "quote_id": quote_id,
-            "message": "Payment confirmed and booking complete"
+            "quote_id": quote_id
         })
         
     except Exception as e:
-        log_error(f"Payment webhook error for {quote_id}", e)
+        log_error(f"Payment webhook error", e)
         return jsonify({"error": "Payment confirmation failed"}), 500
 
+# --- ADMIN ENDPOINTS ---
 @app.route('/api/get-quotes', methods=['GET'])
 def get_quotes():
-    """Get all quotes and their payment status"""
+    """Get all quotes"""
     try:
         with db_lock:
             conn = get_db_connection()
@@ -2016,30 +1929,25 @@ def get_quotes():
             
             cursor.execute('''
                 SELECT q.quote_id, q.booking_ref, q.postcode, q.service, q.created_at, 
-                       q.status, q.customer_phone, q.agent_name, q.call_sid, q.elevenlabs_conversation_id,
-                       s.id as sms_id, s.amount, s.sms_sid, s.payment_status, s.paid_at
+                       q.status, q.customer_phone, q.agent_name,
+                       s.amount, s.sms_sid, s.payment_status, s.paid_at
                 FROM price_quotes q
                 LEFT JOIN sms_payments s ON q.quote_id = s.quote_id
                 ORDER BY q.created_at DESC
             ''')
             
-            quotes = []
-            for row in cursor.fetchall():
-                quote = dict(row)
-                quotes.append(quote)
-            
+            quotes = [dict(row) for row in cursor.fetchall()]
             conn.close()
             
             return jsonify({
                 "status": "success",
                 "quotes": quotes,
-                "count": len(quotes),
-                "timestamp": datetime.now().isoformat()
+                "count": len(quotes)
             })
 
     except Exception as e:
         log_error("Error fetching quotes", e)
-        return jsonify({"error": f"Failed to fetch quotes: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/get-sms-payments', methods=['GET'])
 def get_sms_payments():
@@ -2058,23 +1966,18 @@ def get_sms_payments():
                 ORDER BY s.created_at DESC
             ''')
             
-            sms_payments = []
-            for row in cursor.fetchall():
-                sms_payment = dict(row)
-                sms_payments.append(sms_payment)
-            
+            sms_payments = [dict(row) for row in cursor.fetchall()]
             conn.close()
             
             return jsonify({
                 "status": "success",
                 "sms_payments": sms_payments,
-                "count": len(sms_payments),
-                "timestamp": datetime.now().isoformat()
+                "count": len(sms_payments)
             })
 
     except Exception as e:
         log_error("Error fetching SMS payments", e)
-        return jsonify({"error": f"Failed to fetch SMS payments: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/setup-wasteking', methods=['POST'])
 def setup_wasteking_session():
@@ -2111,62 +2014,31 @@ def setup_wasteking_session():
 def test_sms():
     """Test SMS functionality"""
     try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-            
+        data = request.json or request.form.to_dict()
         phone_number = data.get('phone_number')
+        
         if not phone_number:
             return jsonify({"error": "phone_number is required"}), 400
         
-        # Clean phone number
-        clean_phone = clean_phone_number(phone_number)
-        if not clean_phone:
-            return jsonify({"error": "Invalid phone number format"}), 400
-        
-        # Test SMS sending
         test_quote_id = generate_short_id("TEST")
-        test_amount = "1.00"
+        result = send_sms_payment(test_quote_id, phone_number, "1.00")
         
-        # Initialize Twilio client
-        client = get_twilio_client()
-        if not client:
+        if result['success']:
             return jsonify({
-                "error": "SMS service unavailable",
-                "message": "Twilio client not configured properly"
+                "status": "success",
+                "message": "Test SMS sent successfully",
+                "sms_sid": result['sms_sid'],
+                "test_quote_id": test_quote_id
+            })
+        else:
+            return jsonify({
+                "error": result['error'],
+                "message": result['message']
             }), 500
-
-        # Create test SMS message
-        test_message = f"""TEST MESSAGE - Waste King
-Quote: {test_quote_id}
-Amount: £{test_amount}
-This is a test SMS from your system.
-Time: {datetime.now().strftime('%H:%M:%S')}"""
-
-        # Send test SMS
-        message = client.messages.create(
-            body=test_message,
-            from_=TWILIO_PHONE_NUMBER,
-            to=clean_phone
-        )
-        
-        log_with_timestamp(f"✅ Test SMS sent successfully: {message.sid}")
-        
-        return jsonify({
-            "status": "success",
-            "message": "Test SMS sent successfully",
-            "sms_sid": message.sid,
-            "phone_number": clean_phone,
-            "test_quote_id": test_quote_id,
-            "timestamp": datetime.now().isoformat()
-        })
         
     except Exception as e:
         log_error("SMS test failed", e)
-        return jsonify({
-            "error": f"SMS test failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }), 500
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/test-twilio', methods=['POST'])
 def test_twilio_connection():
@@ -2201,74 +2073,34 @@ def test_twilio_connection():
 
 @app.route('/api/manual-confirm-payment', methods=['POST'])
 def manual_confirm_payment():
-    """
-    Manual payment confirmation endpoint (for testing/admin use)
-    """
+    """Manual payment confirmation"""
     try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-
+        data = request.json or request.form.to_dict()
         quote_id = data.get('quote_id')
         
         if not quote_id:
             return jsonify({"error": "Quote ID is required"}), 400
 
-        log_with_timestamp(f"✅ Manually confirming payment for quote: {quote_id}")
-
-        # Update payment status
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
-            try:
-                # Update quote status
-                cursor.execute(
-                    "UPDATE price_quotes SET status = 'paid' WHERE quote_id = ?",
-                    (quote_id,)
-                )
-                
-                # Update SMS payment status
-                cursor.execute(
-                    "UPDATE sms_payments SET payment_status = 'completed', paid_at = ? WHERE quote_id = ?",
-                    (datetime.now().isoformat(), quote_id)
-                )
-                
-                if cursor.rowcount == 0:
-                    log_with_timestamp(f"❌ Quote not found: {quote_id}")
-                    return jsonify({
-                        "error": "Quote not found",
-                        "quote_id": quote_id,
-                        "message": "Invalid quote ID."
-                    }), 404
+            cursor.execute("UPDATE price_quotes SET status = 'paid' WHERE quote_id = ?", (quote_id,))
+            cursor.execute("UPDATE sms_payments SET payment_status = 'completed', paid_at = ? WHERE quote_id = ?", 
+                         (datetime.now().isoformat(), quote_id))
+            conn.commit()
+            conn.close()
 
-                conn.commit()
-                log_with_timestamp(f"✅ Payment {quote_id} manually confirmed")
+        send_confirmation_sms(quote_id)
 
-                # Send confirmation SMS
-                send_confirmation_sms(quote_id)
-
-                return jsonify({
-                    "status": "success",
-                    "quote_id": quote_id,
-                    "message": "Payment confirmed successfully! Booking is now complete.",
-                    "timestamp": datetime.now().isoformat()
-                }), 200
-
-            except Exception as e:
-                log_error(f"Failed to update payment status", e)
-                return jsonify({
-                    "error": "Database error",
-                    "message": "Unable to confirm payment. Please contact us."
-                }), 500
-            finally:
-                conn.close()
+        return jsonify({
+            "status": "success",
+            "quote_id": quote_id,
+            "message": "Payment confirmed successfully!"
+        })
 
     except Exception as e:
-        log_error("Error confirming payment", e)
-        return jsonify({
-            "error": f"Payment confirmation failed: {str(e)}",
-            "message": "Unable to confirm payment. Please contact us."
-        }), 500
+        log_error("Payment confirmation error", e)
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/system-stats', methods=['GET'])
 def get_system_stats():
@@ -2385,8 +2217,82 @@ def health_check():
         "status": "healthy",
         "service": "waste-king-api",
         "timestamp": datetime.now().isoformat(),
-        "version": "2.0-fixed"
+        "version": "3.0-complete-fixed"
     })
+
+@app.route('/api/debug-request', methods=['POST', 'GET', 'PUT', 'PATCH'])
+def debug_request():
+    """Debug endpoint to see exactly what data is being received"""
+    debug_info = {
+        "method": request.method,
+        "content_type": request.content_type,
+        "headers": dict(request.headers),
+        "is_json": request.is_json,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Try to get data in different ways
+    try:
+        if request.is_json and request.json:
+            debug_info["json_data"] = request.json
+    except:
+        debug_info["json_error"] = "Failed to parse JSON"
+    
+    try:
+        if request.form:
+            debug_info["form_data"] = request.form.to_dict()
+    except:
+        debug_info["form_error"] = "Failed to parse form data"
+    
+    try:
+        if request.args:
+            debug_info["query_params"] = request.args.to_dict()
+    except:
+        debug_info["args_error"] = "Failed to parse query params"
+    
+    try:
+        if request.data:
+            debug_info["raw_data"] = request.data.decode('utf-8')[:500]  # First 500 chars
+    except:
+        debug_info["raw_data_error"] = "Failed to get raw data"
+    
+    log_with_timestamp(f"🔍 Debug request: {debug_info}")
+    
+    return jsonify({
+        "status": "debug_success",
+        "message": "Request received and analyzed",
+        "debug_info": debug_info
+    })
+
+@app.route('/api/test-sms-simple', methods=['GET'])
+def test_sms_simple():
+    """Simple GET endpoint to test SMS with query parameters"""
+    quote_id = request.args.get('quote_id', 'TEST123456')
+    customer_phone = request.args.get('customer_phone')
+    amount = request.args.get('amount', '1.00')
+    
+    if not customer_phone:
+        return jsonify({
+            "error": "customer_phone is required",
+            "usage": "/api/test-sms-simple?quote_id=WK123456&customer_phone=+447123456789&amount=25.00"
+        }), 400
+    
+    # Use the working SMS function
+    result = send_sms_payment(quote_id, customer_phone, amount)
+    
+    if result['success']:
+        return jsonify({
+            "status": "success",
+            "message": f"SMS sent to {customer_phone}",
+            "sms_sid": result['sms_sid'],
+            "quote_id": quote_id,
+            "amount": amount
+        })
+    else:
+        return jsonify({
+            "error": result['error'],
+            "message": result['message']
+        }), 500
 
 # Error handlers
 @app.errorhandler(404)
@@ -2409,8 +2315,15 @@ if __name__ == '__main__':
     # Development only - production uses gunicorn
     port = int(os.environ.get("PORT", 5000))
     log_with_timestamp(f"🚀 Starting Waste King API server on port {port}")
-    log_with_timestamp("✅ SMS-only payments - NO call transfer")
-    log_with_timestamp("✅ SHORT quote IDs - WK123456 format")
-    log_with_timestamp("✅ Enhanced Man & Van recognition")
-    log_with_timestamp("✅ Call stays active during payment")
+    log_with_timestamp("✅ COMPLETE REWRITE - All features included:")
+    log_with_timestamp("  • Call transcription and monitoring")
+    log_with_timestamp("  • OpenAI analysis and scoring")
+    log_with_timestamp("  • WasteKing pricing API integration")
+    log_with_timestamp("  • SMS payments (NO call transfer)")
+    log_with_timestamp("  • PayPal payment webhooks")
+    log_with_timestamp("  • Database storage and dashboard")
+    log_with_timestamp("  • FIXED: Service mapping uses 'mav'")
+    log_with_timestamp("  • FIXED: Collections category added")
+    log_with_timestamp("  • FIXED: SMS endpoint works with all content types")
+    log_with_timestamp("  • REMOVED: Old /api/request-payment endpoint")
     app.run(debug=False, host='0.0.0.0', port=port)
