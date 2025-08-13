@@ -2029,109 +2029,60 @@ def get_payment_twiml(payment_id):
 
 @app.route('/twilio/payment-callback/<payment_id>', methods=['POST'])
 def payment_callback(payment_id):
-    """Handle Braintree payment callback from Twilio"""
-    log_with_timestamp(f"💳 Payment callback received for {payment_id}")
-    
     try:
-        # Get callback data from Twilio
-        callback_data = request.form.to_dict()
-        log_with_timestamp(f"📊 Payment callback data: {callback_data}")
+        print(f"🔄 Payment callback received for payment ID: {payment_id}")
         
-        payment_result = callback_data.get('PaymentResult')
-        payment_sid = callback_data.get('PaymentSid')
-        transaction_id = callback_data.get('PaymentTransactionId', '')
-        call_sid = callback_data.get('CallSid')
+        # Get payment status from request
+        payment_status = request.form.get('payment_status', 'failed')
         
-        # Update payment in database
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            try:
-                if payment_result == 'completed':
-                    # Payment successful
-                    cursor.execute('''
-                        UPDATE payments 
-                        SET payment_status = 'completed', paid_at = ?, twilio_payment_sid = ?, braintree_transaction_id = ?
-                        WHERE payment_id = ?
-                    ''', (datetime.now().isoformat(), payment_sid, transaction_id, payment_id))
-                    
-                    # Also update quote status
-                    cursor.execute('''
-                        UPDATE price_quotes 
-                        SET status = 'paid'
-                        WHERE quote_id = (SELECT quote_id FROM payments WHERE payment_id = ?)
-                    ''', (payment_id,))
-                    
-                    log_with_timestamp(f"✅ Payment {payment_id} completed successfully")
-                    
-                else:
-                    # Payment failed or declined
-                    cursor.execute('''
-                        UPDATE payments 
-                        SET payment_status = 'failed', twilio_payment_sid = ?
-                        WHERE payment_id = ?
-                    ''', (payment_sid, payment_id))
-                    
-                    log_with_timestamp(f"❌ Payment {payment_id} failed: {payment_result}")
-                
-                conn.commit()
-                
-                # Get conversation ID for transfer back
-                cursor.execute("SELECT elevenlabs_conversation_id FROM payments WHERE payment_id = ?", (payment_id,))
-                conversation_row = cursor.fetchone()
-                conversation_id = conversation_row[0] if conversation_row else None
-                
-                conn.close()
-                
-                # Generate response TwiML based on payment result
-                response = VoiceResponse()
-                
-                if payment_result == 'completed':
-                    response.say("Thank you! Your payment has been processed successfully.", voice="alice")
-                    response.pause(length=1)
-                    response.say("Your booking is now complete. You will receive a confirmation shortly.", voice="alice")
-                    
-                    # Transfer back to ElevenLabs if possible
-                    if call_sid:
-                        # Use a slight delay before transfer
-                        response.pause(length=2)
-                        response.say("Please hold while we complete your booking.", voice="alice")
-                        # Note: The actual transfer back happens in a separate thread to avoid blocking
-                        threading.Thread(
-                            target=transfer_call_back_to_elevenlabs, 
-                            args=(call_sid, conversation_id)
-                        ).start()
-                    
-                else:
-                    response.say("We're sorry, but your payment could not be processed at this time.", voice="alice")
-                    response.pause(length=1)
-                    response.say("Please try again or contact us directly for assistance.", voice="alice")
-                    
-                    if call_sid:
-                        # Transfer back to ElevenLabs for error handling
-                        threading.Thread(
-                            target=transfer_call_back_to_elevenlabs, 
-                            args=(call_sid, conversation_id)
-                        ).start()
-                
-                return str(response), 200, {'Content-Type': 'text/xml'}
-                
-            except Exception as e:
-                log_error(f"Database error in payment callback", e)
-                conn.close()
-                
-                # Return error TwiML
-                response = VoiceResponse()
-                response.say("We're sorry, but there was an error processing your payment. Please contact us directly.", voice="alice")
-                return str(response), 200, {'Content-Type': 'text/xml'}
+        # Get database connection
+        cursor = get_db_cursor()
         
+        # Update payment status in database
+        cursor.execute(
+            "UPDATE payments SET status = ? WHERE payment_id = ?",
+            (payment_status, payment_id)
+        )
+        
+        # Get payment details
+        cursor.execute(
+            "SELECT quote_id, call_sid, elevenlabs_conversation_id FROM payments WHERE payment_id = ?", 
+            (payment_id,)
+        )
+        result = cursor.fetchone()
+        
+        cursor.connection.commit()
+        cursor.close()
+        
+        if payment_status == 'completed' or payment_status == 'success':
+            print(f"✅ Payment {payment_id} successful")
+            
+            # Return TwiML to continue with Thomas
+            return '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Payment completed successfully. Let me finalize your booking.</Say>
+    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
+</Response>''', 200, {'Content-Type': 'application/xml'}
+        
+        else:
+            print(f"❌ Payment {payment_id} failed: {payment_status}")
+            
+            # Payment failed - return to Thomas or transfer to human
+            return '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Payment could not be processed. Let me connect you with our sales team to help you.</Say>
+    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
+</Response>''', 200, {'Content-Type': 'application/xml'}
+            
     except Exception as e:
-        log_error(f"Error in payment callback for {payment_id}", e)
+        print(f"❌ Payment callback error: {e}")
         
-        # Return error TwiML
-        response = VoiceResponse()
-        response.say("We're sorry, but there was a system error. Please contact us directly.", voice="alice")
-        return str(response), 200, {'Content-Type': 'text/xml'}
+        # Error handling - return to Thomas
+        return '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">There was a technical issue. Let me help you complete your booking.</Say>
+    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
+</Response>''', 200, {'Content-Type': 'application/xml'}
 
 @app.route('/twilio/complete-call', methods=['GET', 'POST'])
 def complete_call():
