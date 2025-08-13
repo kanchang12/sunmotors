@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-# import re  # COMMENTED OUT - regex import
+import re
 from bs4 import BeautifulSoup
 
 # Twilio imports
@@ -45,7 +45,7 @@ DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY', 'your_deepgram_api_key')
 # OpenAI API
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', 'your_openai_api_key')
 
-# WasteKing API Configuration - FIXED
+# WasteKing API Configuration
 WASTEKING_EMAIL = os.getenv('WASTEKING_EMAIL', 'kanchan.ghosh@wasteking.co.uk')
 WASTEKING_PASSWORD = os.getenv('WASTEKING_PASSWORD', 'T^269725365789ad')
 WASTEKING_BASE_URL = "https://wk-smp-api-dev.azurewebsites.net/"
@@ -144,7 +144,7 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Add the calls table (existing code)
+        # Add the calls table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS calls (
                 oid TEXT PRIMARY KEY,
@@ -272,7 +272,7 @@ def load_wasteking_session():
         return None
 
 def authenticate_wasteking():
-    """Authenticate WasteKing using direct API calls (NO BROWSER)"""
+    """Authenticate WasteKing using direct API calls"""
     log_with_timestamp("🔐 Starting WasteKing authentication with direct API...")
     
     try:
@@ -322,7 +322,6 @@ def authenticate_wasteking():
             }
         
         # Step 2: Parse the login page for form details
-        from bs4 import BeautifulSoup
         soup = BeautifulSoup(login_page_response.text, 'html.parser')
         
         # Look for login form
@@ -515,9 +514,9 @@ def get_wasteking_prices():
             "timestamp": datetime.now().isoformat()
         }
 
-# --- Xelion API Functions (Using Working Patterns) ---
+# --- Xelion API Functions ---
 def xelion_login() -> bool:
-    """Login using the WORKING pattern from transcription.py"""
+    """Login using the working pattern"""
     global session_token
     with login_lock:
         session_token = None
@@ -525,7 +524,7 @@ def xelion_login() -> bool:
         login_url = f"{XELION_BASE_URL.rstrip('/')}/me/login"
         headers = {"Content-Type": "application/json"}
         
-        # Use the WORKING userspace pattern
+        # Use the working userspace pattern
         if XELION_USERSPACE:
             userspace = XELION_USERSPACE
         else:
@@ -565,12 +564,12 @@ def xelion_login() -> bool:
             return False
 
 def fetch_all_communications_from_start_time(until_date: datetime, start_time: datetime) -> List[Dict]:
-    """Fetch UNLIMITED calls but ONLY from start_time onwards (Aug 4th 2025 9 AM+)"""
+    """Fetch UNLIMITED calls but ONLY from start_time onwards"""
     all_communications = []
     before_oid = None
     page = 1
     
-    # Use the WORKING base URLs pattern
+    # Use the working base URLs pattern
     base_urls_to_try = [
         XELION_BASE_URL,  
         XELION_BASE_URL.replace('/wasteking', '/master'), 
@@ -590,7 +589,7 @@ def fetch_all_communications_from_start_time(until_date: datetime, start_time: d
             for base_url in base_urls_to_try:
                 communications_url = f"{base_url.rstrip('/')}/communications"
                 try:
-                    log_with_timestamp(f"Fetching UNLIMITED page {page} from {communications_url} (attempt {attempt + 1})")
+                    log_with_timestamp(f"Fetching page {page} from {communications_url} (attempt {attempt + 1})")
                     response = xelion_session.get(communications_url, params=params, timeout=30)
                     
                     if response.status_code == 401:
@@ -740,7 +739,6 @@ def download_audio(communication_oid: str) -> Optional[str]:
     file_name = f"{communication_oid}.mp3"
     file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
 
-    
     # Try multiple times with re-auth if needed
     for attempt in range(3):
         try:
@@ -1290,7 +1288,7 @@ def transfer_call_to_payment(call_sid: str, payment_twiml_url: str) -> bool:
         # Update the call to execute payment TwiML
         call = client.calls(call_sid).update(
             url=payment_twiml_url,
-            method='POST'  # Fixed: Use POST for TwiML endpoints
+            method='POST'
         )
         
         log_with_timestamp(f"✅ Call {call_sid} transferred to payment processing")
@@ -1392,7 +1390,7 @@ def get_dashboard_data():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Total counts - ALL CALLS IN DB HAVE AUDIO NOW
+        # Total counts
         cursor.execute("SELECT COUNT(*) FROM calls")
         total_calls = cursor.fetchone()[0]
 
@@ -1402,7 +1400,7 @@ def get_dashboard_data():
         cursor.execute("SELECT SUM(transcribed_duration_minutes) FROM calls")
         total_duration_minutes = cursor.fetchone()[0] or 0.0
 
-        # Average ratings - ALL CALLS HAVE TRANSCRIPTIONS NOW
+        # Average ratings
         cursor.execute("""
             SELECT AVG(openai_engagement), AVG(openai_politeness), 
                    AVG(openai_professionalism), AVG(openai_resolution)
@@ -1467,7 +1465,7 @@ def get_dashboard_data():
             "follow_up_next_steps": round(avg_resolution_subs[3] or 0, 2),
         }
 
-        # Category ratings - UPDATE CATEGORIES SINCE NO MORE "No Audio" CALLS
+        # Category ratings
         category_ratings = {}
         categories = ["SKIP", "man in van", "general enquiry", "complaint"] 
         for cat in categories:
@@ -1501,7 +1499,7 @@ def get_dashboard_data():
 
 @app.route('/get_calls_list')
 def get_calls_list():
-    """Get paginated calls list - ALL CALLS NOW HAVE AUDIO"""
+    """Get paginated calls list"""
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     agent_filter = request.args.get('agent', '')
@@ -1513,7 +1511,7 @@ def get_calls_list():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Build query with filters - NO AUDIO FILTER NEEDED
+        # Build query with filters
         where_conditions = []
         params = []
         
@@ -1622,20 +1620,19 @@ def get_wasteking_prices_from_api():
         # Clean and validate postcode format
         postcode_clean = postcode.upper().replace(' ', '')
         
-        # Basic UK postcode validation - COMMENTED OUT (was causing errors)
-        # import re  # COMMENTED OUT - regex import
-        # uk_postcode_pattern = r'^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}
+        # Basic UK postcode validation
+        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$'
         
-        # if not re.match(uk_postcode_pattern, postcode_clean):  # COMMENTED OUT - regex match
-        #     log_with_timestamp(f"❌ Invalid postcode format: {postcode}")
-        #     return jsonify({
-        #         "status": "error",
-        #         "quote_id": str(uuid.uuid4()),
-        #         "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED' or 'M1 1AA'.",
-        #         "error": "Invalid postcode format",
-        #         "example_postcodes": ["LS1 4ED", "M1 1AA", "EC1A 1BB"],
-        #         "timestamp": datetime.now().isoformat()
-        #     }), 400
+        if not re.match(uk_postcode_pattern, postcode_clean):
+            log_with_timestamp(f"❌ Invalid postcode format: {postcode}")
+            return jsonify({
+                "status": "error",
+                "quote_id": str(uuid.uuid4()),
+                "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED' or 'M1 1AA'.",
+                "error": "Invalid postcode format",
+                "example_postcodes": ["LS1 4ED", "M1 1AA", "EC1A 1BB"],
+                "timestamp": datetime.now().isoformat()
+            }), 400
 
         # Re-format postcode properly (add space if missing)
         if len(postcode_clean) >= 5:
@@ -1681,7 +1678,7 @@ def get_wasteking_prices_from_api():
         log_with_timestamp("📝 Step 2: Updating booking with search...")
 
         # Step 2: Update the booking to perform a search
-        # Map ElevenLabs service names to WasteKing API names (based on WasteKing call flow document)
+        # Map ElevenLabs service names to WasteKing API names
         service_mapping = {
             # Skip Hire variations
             "skip hire": "skip",
@@ -1718,7 +1715,7 @@ def get_wasteking_prices_from_api():
             "rubbish collection": "removal",
             "waste collection": "removal",
             
-            # Specialist services (these may need human transfer but try API first)
+            # Specialist services
             "hazardous waste": "hazardous",
             "asbestos": "asbestos",
             "electrical waste": "weee",
@@ -1851,7 +1848,7 @@ def get_wasteking_prices_from_api():
 @app.route('/api/request-payment', methods=['POST'])
 def request_payment():
     """
-    Modified to trigger Twilio call transfer for Braintree payment instead of PayPal
+    Modified to trigger Twilio call transfer for Braintree payment
     """
     log_with_timestamp("💳 Braintree payment request received")
     
@@ -1864,7 +1861,7 @@ def request_payment():
         amount = data.get('amount')
         currency = data.get('currency', 'GBP')
         customer_phone = data.get('customer_phone', 'Unknown')
-        call_sid = data.get('call_sid')  # Get current call SID from ElevenLabs
+        call_sid = data.get('call_sid')
 
         # Generate payment ID first
         payment_id = str(uuid.uuid4())
@@ -1880,7 +1877,6 @@ def request_payment():
         # Note: call_sid might be None if ElevenLabs doesn't provide it yet
         if not call_sid:
             log_with_timestamp(f"⚠️ Warning: No call_sid provided for payment {payment_id}")
-            # For now, continue without call transfer - just create payment record
             call_sid = "pending_from_elevenlabs"
 
         # Store payment request in database
@@ -1926,7 +1922,7 @@ def request_payment():
                     ''', (conversation_id, payment_id))
                     conn.commit()
 
-                # FIXED: Actually transfer the call if call_sid is provided
+                # Actually transfer the call if call_sid is provided
                 if call_sid and call_sid != "pending_from_elevenlabs":
                     payment_twiml_url = f"{SERVER_BASE_URL}/twilio/payment-twiml/{payment_id}"
                     
@@ -2405,713 +2401,6 @@ def test_call_transfer():
         log_error("Call transfer test failed", e)
         return jsonify({
             "error": f"Test failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-if __name__ == '__main__':
-    # Development only - production uses gunicorn
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)  # COMMENTED OUT - regex pattern
-        
-        # if not re.match(uk_postcode_pattern, postcode_clean):  # COMMENTED OUT - regex match
-        #     log_with_timestamp(f"❌ Invalid postcode format: {postcode}")
-        #     return jsonify({
-        #         "status": "error",
-        #         "quote_id": str(uuid.uuid4()),
-        #         "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED' or 'M1 1AA'.",
-        #         "error": "Invalid postcode format",
-        #         "example_postcodes": ["LS1 4ED", "M1 1AA", "EC1A 1BB"],
-        #         "timestamp": datetime.now().isoformat()
-        #     }), 400
-
-        # Re-format postcode properly (add space if missing)
-        if len(postcode_clean) >= 5:
-            postcode = f"{postcode_clean[:-3]} {postcode_clean[-3:]}"
-        else:
-            postcode = postcode_clean
-
-        # Headers for WasteKing API calls
-        headers = {
-            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
-            "Content-Type": "application/json"
-        }
-
-        log_with_timestamp("📝 Step 1: Creating booking reference...")
-
-        # Step 1: Create a BookingRef
-        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
-        create_payload = {
-            "type": "chatbot",
-            "source": "wasteking.co.uk"
-        }
-        
-        log_with_timestamp(f"🌐 POST {create_url}")
-        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15, verify=False)
-        
-        log_with_timestamp(f"📊 Create response: {create_response.status_code}")
-        
-        if create_response.status_code != 200:
-            log_with_timestamp(f"❌ Create failed: {create_response.text}")
-            return jsonify({
-                "error": f"Failed to create booking: {create_response.status_code}",
-                "details": create_response.text
-            }), 500
-
-        create_data = create_response.json()
-        booking_ref = create_data.get('bookingRef')
-
-        if not booking_ref:
-            log_with_timestamp(f"❌ No bookingRef in response: {create_data}")
-            return jsonify({"error": "Failed to get booking reference"}), 500
-
-        log_with_timestamp(f"✅ Got booking ref: {booking_ref}")
-        log_with_timestamp("📝 Step 2: Updating booking with search...")
-
-        # Step 2: Update the booking to perform a search
-        # Map ElevenLabs service names to WasteKing API names (based on WasteKing call flow document)
-        service_mapping = {
-            # Skip Hire variations
-            "skip hire": "skip",
-            "skip": "skip",
-            "skips": "skip",
-            "skip rental": "skip",
-            
-            # Man & Van variations  
-            "man and van": "man-in-van",
-            "man in van": "man-in-van",
-            "man & van": "man-in-van",
-            "van": "man-in-van",
-            "man with van": "man-in-van",
-            "removal van": "man-in-van",
-            
-            # Grab Hire variations
-            "grab hire": "grab",
-            "grab": "grab",
-            "grab lorry": "grab",
-            "grab truck": "grab",
-            
-            # Clearance variations
-            "house clearance": "clearance",
-            "office clearance": "clearance",
-            "clearance": "clearance",
-            "property clearance": "clearance",
-            "house clear": "clearance",
-            "office clear": "clearance",
-            
-            # Waste removal general
-            "waste removal": "removal",
-            "removal": "removal",
-            "rubbish removal": "removal",
-            "rubbish collection": "removal",
-            "waste collection": "removal",
-            
-            # Specialist services (these may need human transfer but try API first)
-            "hazardous waste": "hazardous",
-            "asbestos": "asbestos",
-            "electrical waste": "weee",
-            "weee": "weee",
-            "chemical disposal": "chemical",
-            
-            # General fallbacks
-            "waste": "removal",
-            "rubbish": "removal"
-        }
-        
-        # Convert service name with intelligent fallbacks
-        wasteking_service = service_mapping.get(service.lower(), service.lower())
-        log_with_timestamp(f"🔄 Mapped service '{service}' → '{wasteking_service}' for postcode {postcode}")
-        
-        update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
-        update_payload = {
-            "bookingRef": booking_ref,
-            "search": {
-                "postCode": postcode,
-                "service": wasteking_service
-            }
-        }
-        
-        log_with_timestamp(f"🌐 POST {update_url}")
-        log_with_timestamp(f"📦 Payload: {update_payload}")
-        
-        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20, verify=False)
-        
-        log_with_timestamp(f"📊 Update response: {update_response.status_code}")
-        update_data = update_response.json()
-        log_with_timestamp(f"📄 Update response body: {update_data}")
-
-        # Generate quote ID regardless of search results
-        quote_id = str(uuid.uuid4())
-        customer_phone = data.get('customer_phone', 'Unknown')
-        agent_name = data.get('agent_name', 'Agent')
-        call_sid = data.get('call_sid', '')
-        conversation_id = data.get('conversation_id', '')
-
-        # Store the quote in database (even if no results found)
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            try:
-                cursor.execute('''
-                    INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status, call_sid, elevenlabs_conversation_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    quote_id, booking_ref, postcode, service, json.dumps(update_data), 
-                    datetime.now().isoformat(), customer_phone, agent_name, 
-                    'no_results' if update_response.status_code != 200 else 'pending',
-                    call_sid, conversation_id
-                ))
-                conn.commit()
-                log_with_timestamp(f"📝 Stored quote {quote_id} in database")
-            except Exception as e:
-                log_error(f"Failed to store quote in database", e)
-            finally:
-                conn.close()
-
-        # Handle different response scenarios
-        if update_response.status_code == 200:
-            # Success case
-            return jsonify({
-                "status": "success",
-                "quote_id": quote_id,
-                "bookingRef": booking_ref,
-                "search_results": update_data,
-                "postcode": postcode,
-                "service": service,
-                "timestamp": datetime.now().isoformat(),
-                "message": "Price quote generated successfully. Agent can ask customer about payment."
-            }), 200
-            
-        elif update_response.status_code == 404 or "No results found" in str(update_data):
-            # No results found - provide helpful alternatives
-            return jsonify({
-                "status": "success",
-                "quote_id": quote_id,
-                "bookingRef": booking_ref,
-                "search_results": update_data,
-                "postcode": postcode,
-                "service": service,
-                "timestamp": datetime.now().isoformat(),
-                "message": f"Sorry, we don't currently service {wasteking_service} in {postcode}. Try a nearby postcode or contact us directly.",
-                "suggestions": [
-                    "Check if you typed the postcode correctly",
-                    "Try a nearby postcode in the same area",
-                    f"We may offer other services in {postcode} - try 'skip', 'man-in-van', or 'clearance'",
-                    "Contact us directly for special arrangements"
-                ],
-                "no_results": True
-            }), 200
-            
-        else:
-            # Other error
-            log_with_timestamp(f"❌ Update failed: {update_data}")
-            return jsonify({
-                "status": "error",
-                "quote_id": quote_id,
-                "bookingRef": booking_ref,
-                "error": f"Search failed: {update_response.status_code}",
-                "details": update_data,
-                "postcode": postcode,
-                "service": service,
-                "timestamp": datetime.now().isoformat(),
-                "message": "Unable to get pricing at this time. Please contact us directly."
-            }), 200  # Return 200 so ElevenLabs doesn't see it as error
-
-    except requests.exceptions.Timeout:
-        log_error("WasteKing API timeout")
-        return jsonify({
-            "error": "API timeout - please try again",
-            "message": "Service temporarily unavailable. Please try again in a moment."
-        }), 504
-    except requests.exceptions.RequestException as e:
-        log_error("WasteKing API request failed", e)
-        return jsonify({
-            "error": f"API request failed: {str(e)}",
-            "message": "Unable to connect to pricing service. Please contact us directly."
-        }), 500
-    except Exception as e:
-        log_error("Unexpected error in WasteKing API", e)
-        return jsonify({
-            "error": f"Unexpected error: {str(e)}",
-            "message": "System error occurred. Please contact us directly."
-        }), 500
-
-@app.route('/api/request-payment', methods=['POST'])
-def request_payment():
-    """
-    Modified to trigger Twilio call transfer for Braintree payment instead of PayPal
-    """
-    log_with_timestamp("💳 Braintree payment request received")
-    
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-
-        quote_id = data.get('quote_id')
-        amount = data.get('amount')
-        currency = data.get('currency', 'GBP')
-        customer_phone = data.get('customer_phone', 'Unknown')
-        call_sid = data.get('call_sid')  # Get current call SID from ElevenLabs
-
-        # Generate payment ID first
-        payment_id = str(uuid.uuid4())
-        
-        log_with_timestamp(f"💳 Braintree payment request for quote: {quote_id}, amount: {amount}, call_sid: {call_sid}")
-
-        if not quote_id or not amount:
-            return jsonify({
-                "error": "Quote ID and amount are required",
-                "required_fields": ["quote_id", "amount"]
-            }), 400
-
-        # Note: call_sid might be None if ElevenLabs doesn't provide it yet
-        if not call_sid:
-            log_with_timestamp(f"⚠️ Warning: No call_sid provided for payment {payment_id}")
-            # For now, continue without call transfer - just create payment record
-            call_sid = "pending_from_elevenlabs"
-
-        # Store payment request in database
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            try:
-                # Check if quote exists
-                cursor.execute("SELECT booking_ref, status, elevenlabs_conversation_id FROM price_quotes WHERE quote_id = ?", (quote_id,))
-                quote_row = cursor.fetchone()
-                
-                if not quote_row:
-                    log_with_timestamp(f"❌ Quote not found: {quote_id}")
-                    return jsonify({
-                        "error": "Quote not found", 
-                        "quote_id": quote_id,
-                        "message": "Invalid quote ID. Please get a new price quote."
-                    }), 404
-
-                booking_ref = quote_row[0]
-                quote_status = quote_row[1]
-                conversation_id = quote_row[2]
-                
-                log_with_timestamp(f"✅ Found quote: {quote_id}, booking_ref: {booking_ref}, status: {quote_status}")
-
-                # Insert payment request
-                cursor.execute('''
-                    INSERT INTO payments (payment_id, quote_id, booking_ref, amount, currency, created_at, customer_phone, call_sid)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    payment_id, quote_id, booking_ref, float(amount), currency, 
-                    datetime.now().isoformat(), customer_phone, call_sid
-                ))
-                conn.commit()
-                log_with_timestamp(f"💳 Created payment request {payment_id}")
-
-                # Generate TwiML for payment processing
-                payment_twiml = generate_payment_twiml(float(amount), currency, payment_id, quote_id)
-                if not payment_twiml:
-                    return jsonify({
-                        "error": "Failed to generate payment flow",
-                        "message": "Unable to process payment. Please try again."
-                    }), 500
-
-                # Store conversation ID for later transfer back
-                if conversation_id:
-                    cursor.execute('''
-                        UPDATE payments 
-                        SET elevenlabs_conversation_id = ?
-                        WHERE payment_id = ?
-                    ''', (conversation_id, payment_id))
-                    conn.commit()
-
-                return jsonify({
-                    "status": "success",
-                    "payment_id": payment_id,
-                    "quote_id": quote_id,
-                    "amount": float(amount),
-                    "currency": currency,
-                    "call_transfer_initiated": True,
-                    "payment_twiml_url": f"{SERVER_BASE_URL}/twilio/payment-twiml/{payment_id}",
-                    "message": f"Payment processing initiated. Customer will be transferred to secure payment system.",
-                    "timestamp": datetime.now().isoformat()
-                }), 200
-
-            except Exception as e:
-                log_error(f"Failed to create payment request", e)
-                return jsonify({
-                    "error": "Database error",
-                    "message": "Unable to process payment request. Please try again."
-                }), 500
-            finally:
-                conn.close()
-
-    except Exception as e:
-        log_error("Error creating payment request", e)
-        return jsonify({
-            "error": f"Payment request failed: {str(e)}",
-            "message": "Unable to process payment. Please contact us directly."
-        }), 500
-
-@app.route('/twilio/payment-twiml/<payment_id>', methods=['GET'])
-def get_payment_twiml(payment_id):
-    """Serve TwiML for payment processing"""
-    try:
-        # Get payment details from database
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT amount, currency, quote_id FROM payments WHERE payment_id = ?", (payment_id,))
-            payment_row = cursor.fetchone()
-            conn.close()
-        
-        if not payment_row:
-            # Return error TwiML
-            response = VoiceResponse()
-            response.say("We're sorry, but there was an error processing your payment. Please try again later.", voice="alice")
-            response.hangup()
-            return str(response), 200, {'Content-Type': 'text/xml'}
-        
-        amount = payment_row[0]
-        currency = payment_row[1]
-        quote_id = payment_row[2]
-        
-        # Generate and return payment TwiML
-        payment_twiml = generate_payment_twiml(amount, currency, payment_id, quote_id)
-        if payment_twiml:
-            return payment_twiml, 200, {'Content-Type': 'text/xml'}
-        else:
-            # Fallback error TwiML
-            response = VoiceResponse()
-            response.say("We're sorry, but there was an error setting up your payment. Please try again later.", voice="alice")
-            response.hangup()
-            return str(response), 200, {'Content-Type': 'text/xml'}
-            
-    except Exception as e:
-        log_error(f"Error serving payment TwiML for {payment_id}", e)
-        response = VoiceResponse()
-        response.say("We're sorry, but there was a system error. Please try again later.", voice="alice")
-        response.hangup()
-        return str(response), 200, {'Content-Type': 'text/xml'}
-
-@app.route('/twilio/payment-callback/<payment_id>', methods=['POST'])
-def payment_callback(payment_id):
-    """Handle Braintree payment callback from Twilio"""
-    log_with_timestamp(f"💳 Payment callback received for {payment_id}")
-    
-    try:
-        # Get callback data from Twilio
-        callback_data = request.form.to_dict()
-        log_with_timestamp(f"📊 Payment callback data: {callback_data}")
-        
-        payment_result = callback_data.get('PaymentResult')
-        payment_sid = callback_data.get('PaymentSid')
-        transaction_id = callback_data.get('PaymentTransactionId', '')
-        call_sid = callback_data.get('CallSid')
-        
-        # Update payment in database
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            try:
-                if payment_result == 'completed':
-                    # Payment successful
-                    cursor.execute('''
-                        UPDATE payments 
-                        SET payment_status = 'completed', paid_at = ?, twilio_payment_sid = ?, braintree_transaction_id = ?
-                        WHERE payment_id = ?
-                    ''', (datetime.now().isoformat(), payment_sid, transaction_id, payment_id))
-                    
-                    # Also update quote status
-                    cursor.execute('''
-                        UPDATE price_quotes 
-                        SET status = 'paid'
-                        WHERE quote_id = (SELECT quote_id FROM payments WHERE payment_id = ?)
-                    ''', (payment_id,))
-                    
-                    log_with_timestamp(f"✅ Payment {payment_id} completed successfully")
-                    
-                else:
-                    # Payment failed or declined
-                    cursor.execute('''
-                        UPDATE payments 
-                        SET payment_status = 'failed', twilio_payment_sid = ?
-                        WHERE payment_id = ?
-                    ''', (payment_sid, payment_id))
-                    
-                    log_with_timestamp(f"❌ Payment {payment_id} failed: {payment_result}")
-                
-                conn.commit()
-                
-                # Get conversation ID for transfer back
-                cursor.execute("SELECT elevenlabs_conversation_id FROM payments WHERE payment_id = ?", (payment_id,))
-                conversation_row = cursor.fetchone()
-                conversation_id = conversation_row[0] if conversation_row else None
-                
-                conn.close()
-                
-                # Generate response TwiML based on payment result
-                response = VoiceResponse()
-                
-                if payment_result == 'completed':
-                    response.say("Thank you! Your payment has been processed successfully.", voice="alice")
-                    response.pause(length=1)
-                    response.say("Your booking is now complete. You will receive a confirmation shortly.", voice="alice")
-                    
-                    # Transfer back to ElevenLabs if possible
-                    if call_sid:
-                        # Use a slight delay before transfer
-                        response.pause(length=2)
-                        response.say("Please hold while we complete your booking.", voice="alice")
-                        # Note: The actual transfer back happens in a separate thread to avoid blocking
-                        threading.Thread(
-                            target=transfer_call_back_to_elevenlabs, 
-                            args=(call_sid, conversation_id)
-                        ).start()
-                    
-                else:
-                    response.say("We're sorry, but your payment could not be processed at this time.", voice="alice")
-                    response.pause(length=1)
-                    response.say("Please try again or contact us directly for assistance.", voice="alice")
-                    
-                    if call_sid:
-                        # Transfer back to ElevenLabs for error handling
-                        threading.Thread(
-                            target=transfer_call_back_to_elevenlabs, 
-                            args=(call_sid, conversation_id)
-                        ).start()
-                
-                return str(response), 200, {'Content-Type': 'text/xml'}
-                
-            except Exception as e:
-                log_error(f"Database error in payment callback", e)
-                conn.close()
-                
-                # Return error TwiML
-                response = VoiceResponse()
-                response.say("We're sorry, but there was an error processing your payment. Please contact us directly.", voice="alice")
-                return str(response), 200, {'Content-Type': 'text/xml'}
-        
-    except Exception as e:
-        log_error(f"Error in payment callback for {payment_id}", e)
-        
-        # Return error TwiML
-        response = VoiceResponse()
-        response.say("We're sorry, but there was a system error. Please contact us directly.", voice="alice")
-        return str(response), 200, {'Content-Type': 'text/xml'}
-
-@app.route('/twilio/complete-call', methods=['GET', 'POST'])
-def complete_call():
-    """Fallback endpoint to complete calls gracefully"""
-    response = VoiceResponse()
-    response.say("Thank you for choosing WasteKing. Your booking has been processed. Have a great day!", voice="alice")
-    response.hangup()
-    return str(response), 200, {'Content-Type': 'text/xml'}
-
-@app.route('/api/confirm-payment', methods=['POST'])
-def confirm_payment():
-    """
-    Manual payment confirmation (kept for backward compatibility)
-    """
-    log_with_timestamp("✅ Manual payment confirmation received")
-    
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
-
-        payment_id = data.get('payment_id')
-        
-        if not payment_id:
-            return jsonify({"error": "Payment ID is required"}), 400
-
-        log_with_timestamp(f"✅ Manually confirming payment: {payment_id}")
-
-        # Update payment status
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            try:
-                cursor.execute('''
-                    UPDATE payments 
-                    SET payment_status = 'completed', paid_at = ?
-                    WHERE payment_id = ?
-                ''', (datetime.now().isoformat(), payment_id))
-                
-                if cursor.rowcount == 0:
-                    log_with_timestamp(f"❌ Payment not found: {payment_id}")
-                    return jsonify({
-                        "error": "Payment not found",
-                        "payment_id": payment_id,
-                        "message": "Invalid payment ID."
-                    }), 404
-
-                # Also update the quote status
-                cursor.execute('''
-                    UPDATE price_quotes 
-                    SET status = 'paid'
-                    WHERE quote_id = (SELECT quote_id FROM payments WHERE payment_id = ?)
-                ''', (payment_id,))
-
-                conn.commit()
-                log_with_timestamp(f"✅ Payment {payment_id} manually confirmed")
-
-                return jsonify({
-                    "status": "success",
-                    "payment_id": payment_id,
-                    "message": "Payment confirmed successfully! Booking is now complete.",
-                    "timestamp": datetime.now().isoformat()
-                }), 200
-
-            except Exception as e:
-                log_error(f"Failed to update payment status", e)
-                return jsonify({
-                    "error": "Database error",
-                    "message": "Unable to confirm payment. Please contact us."
-                }), 500
-            finally:
-                conn.close()
-
-    except Exception as e:
-        log_error("Error confirming payment", e)
-        return jsonify({
-            "error": f"Payment confirmation failed: {str(e)}",
-            "message": "Unable to confirm payment. Please contact us."
-        }), 500
-
-@app.route('/api/get-quotes', methods=['GET'])
-def get_quotes():
-    """Get all quotes and their payment status"""
-    try:
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT q.quote_id, q.booking_ref, q.postcode, q.service, q.created_at, 
-                       q.status, q.customer_phone, q.agent_name, q.call_sid, q.elevenlabs_conversation_id,
-                       p.payment_id, p.amount, p.currency, p.payment_status, p.paid_at,
-                       p.twilio_payment_sid, p.braintree_transaction_id
-                FROM price_quotes q
-                LEFT JOIN payments p ON q.quote_id = p.quote_id
-                ORDER BY q.created_at DESC
-            ''')
-            
-            quotes = []
-            for row in cursor.fetchall():
-                quote = dict(row)
-                quotes.append(quote)
-            
-            conn.close()
-            
-            return jsonify({
-                "status": "success",
-                "quotes": quotes,
-                "count": len(quotes),
-                "timestamp": datetime.now().isoformat()
-            })
-
-    except Exception as e:
-        log_error("Error fetching quotes", e)
-        return jsonify({"error": f"Failed to fetch quotes: {str(e)}"}), 500
-
-@app.route('/api/get-payments', methods=['GET'])
-def get_payments():
-    """Get all payment records"""
-    try:
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT p.payment_id, p.quote_id, p.booking_ref, p.amount, p.currency,
-                       p.payment_status, p.created_at, p.paid_at, p.customer_phone,
-                       p.twilio_payment_sid, p.braintree_transaction_id, p.call_sid,
-                       q.postcode, q.service, q.agent_name
-                FROM payments p
-                LEFT JOIN price_quotes q ON p.quote_id = q.quote_id
-                ORDER BY p.created_at DESC
-            ''')
-            
-            payments = []
-            for row in cursor.fetchall():
-                payment = dict(row)
-                payments.append(payment)
-            
-            conn.close()
-            
-            return jsonify({
-                "status": "success",
-                "payments": payments,
-                "count": len(payments),
-                "timestamp": datetime.now().isoformat()
-            })
-
-    except Exception as e:
-        log_error("Error fetching payments", e)
-        return jsonify({"error": f"Failed to fetch payments: {str(e)}"}), 500
-
-@app.route('/api/setup-wasteking', methods=['POST'])
-def setup_wasteking_session():
-    """Setup WasteKing authentication"""
-    try:
-        log_with_timestamp("🚀 Starting WasteKing setup...")
-        auth_result = authenticate_wasteking()
-        
-        if isinstance(auth_result, dict) and "error" in auth_result:
-            return jsonify(auth_result), 500
-        
-        if auth_result:
-            return jsonify({
-                "status": "success",
-                "message": "WasteKing authentication successful!",
-                "timestamp": datetime.now().isoformat()
-            })
-        else:
-            return jsonify({
-                "status": "error",
-                "message": "Authentication failed",
-                "timestamp": datetime.now().isoformat()
-            }), 500
-            
-    except Exception as e:
-        log_error("WasteKing setup error", e)
-        return jsonify({
-            "status": "error",
-            "message": f"Setup failed: {str(e)}",
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-@app.route('/api/test-twilio', methods=['POST'])
-def test_twilio_connection():
-    """Test Twilio connection and Braintree configuration"""
-    try:
-        client = get_twilio_client()
-        if not client:
-            return jsonify({
-                "status": "error",
-                "message": "Failed to initialize Twilio client"
-            }), 500
-        
-        # Test account info
-        account = client.api.accounts(TWILIO_ACCOUNT_SID).fetch()
-        
-        # Test payment connector
-        connectors = client.trusthub.v1.payment_connectors.list(limit=20)
-        braintree_connector_found = any(c.sid == BRAINTREE_CONNECTOR_SID for c in connectors)
-        
-        return jsonify({
-            "status": "success",
-            "message": "Twilio connection successful",
-            "account_status": account.status,
-            "account_friendly_name": account.friendly_name,
-            "braintree_connector_configured": braintree_connector_found,
-            "braintree_connector_sid": BRAINTREE_CONNECTOR_SID,
-            "braintree_merchant_id": BRAINTREE_MERCHANT_ID,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    except Exception as e:
-        log_error("Error testing Twilio connection", e)
-        return jsonify({
-            "status": "error",
-            "message": f"Twilio test failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }), 500
 
