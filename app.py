@@ -1822,37 +1822,92 @@ def get_wasteking_prices_from_api():
             "timestamp": datetime.now().isoformat()
         }), 200
 
-@app.route('/api/send-payment-sms', methods=['GET'])
+@app.route('/api/send-payment-sms', methods=['POST'])
 def send_payment_sms():
-    """GET endpoint that handles malformed ElevenLabs requests"""
+    """Handle payment requests from ElevenLabs"""
     try:
-        # Debug raw input
-        log_with_timestamp(f"Raw GET params: {request.args}")
+        # 1. Parse incoming JSON
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "No JSON data received",
+                "solution": "Please check tool configuration"
+            }), 400
 
-        # Extract with fallbacks
-        quote_id = request.args.get('quote_id', 'UNKNOWN_QUOTE')
-        raw_phone = request.args.get('caller_phone', '')
-        amount = request.args.get('amount', '1.00')
+        # 2. Validate required fields
+        required_fields = {
+            'customer_phone': 'Customer phone number',
+            'call_sid': 'Call SID',
+            'amount': 'Payment amount'
+        }
+        
+        missing_fields = [name for field, name in required_fields.items() if not data.get(field)]
+        if missing_fields:
+            return jsonify({
+                "status": "error",
+                "message": f"Missing required fields: {', '.join(missing_fields)}",
+                "received_data": data
+            }), 400
 
-        # Fix malformed phone (when ElevenLabs sends "Phone")
-        caller_phone = raw_phone if raw_phone and raw_phone != "Phone" else "+447700900123"  # Fallback test number
+        # 3. Clean and validate phone number
+        phone = data['customer_phone'].strip()
+        if phone.startswith('0'):
+            phone = f"+44{phone[1:]}"
+        elif phone.startswith('44'):
+            phone = f"+{phone}"
+        
+        if not re.match(r'^\+44\d{9,10}$', phone):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid UK phone number format",
+                "example": "+447700900123"
+            }), 400
 
-        # Send SMS
+        # 4. Force £1 amount as specified
+        amount = "1.00"
+
+        # 5. Send SMS via Twilio
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         message = client.messages.create(
-            body=f"Waste King Payment\nAmount: £{amount}\nQuote: {quote_id}\nPay now: {PAYPAL_PAYMENT_LINK}",
+            body=f"Waste King Payment\nAmount: £{amount}\nReference: {data['call_sid']}\nPay now: {PAYPAL_PAYMENT_LINK}",
             from_=TWILIO_PHONE_NUMBER,
-            to=caller_phone
+            to=phone
         )
+
+        # 6. Store in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments 
+                (quote_id, customer_phone, amount, sms_sid, call_sid, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                f"WK-{datetime.now().strftime('%Y%m%d')}",
+                phone,
+                float(amount),
+                message.sid,
+                data['call_sid'],
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
 
         return jsonify({
             "status": "success",
-            "phone": caller_phone,
-            "quote_id": quote_id
+            "message": f"SMS sent to {phone}",
+            "amount": f"£{amount}",
+            "call_sid": data['call_sid']
         })
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        log_error("Payment processing failed", e)
+        return jsonify({
+            "status": "error",
+            "message": "System error",
+            "debug": str(e)
+        }), 500
 
 # --- ADMIN ENDPOINTS ---
 @app.route('/api/get-quotes', methods=['GET'])
