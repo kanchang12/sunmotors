@@ -55,10 +55,14 @@ WASTEKING_PRICING_URL = f"{WASTEKING_BASE_URL}/reporting/priced-area-coverage-br
 # Twilio + Braintree Configuration
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', 'your_twilio_sid')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', 'your_twilio_token')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', 'your_twilio_phone_number')  # Add this
 BRAINTREE_CONNECTOR_SID = "XEf479d2720372e1d3bbeade564221029a"
 BRAINTREE_MERCHANT_ID = "99szgbfz5tr6vmjf"
 ELEVENLABS_WEBHOOK_URL = os.getenv('ELEVENLABS_WEBHOOK_URL', 'your_elevenlabs_webhook')
 SERVER_BASE_URL = "https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app"
+
+# PayPal payment link
+PAYPAL_PAYMENT_LINK = "https://www.paypal.com/ncp/payment/BQ82GUU9VSKYN"
 
 # Database configuration
 DATABASE_FILE = 'calls.db'
@@ -210,6 +214,23 @@ def init_db():
                 twilio_payment_sid TEXT,
                 braintree_transaction_id TEXT,
                 call_sid TEXT,
+                elevenlabs_conversation_id TEXT,
+                FOREIGN KEY (quote_id) REFERENCES price_quotes (quote_id)
+            )
+        ''')
+        
+        # NEW: SMS payments table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sms_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quote_id TEXT,
+                customer_phone TEXT,
+                amount REAL,
+                sms_sid TEXT,
+                payment_status TEXT DEFAULT 'pending',
+                created_at TEXT,
+                paid_at TEXT,
+                paypal_link TEXT,
                 FOREIGN KEY (quote_id) REFERENCES price_quotes (quote_id)
             )
         ''')
@@ -1037,7 +1058,7 @@ def categorize_call(transcript: str) -> str:
     if "skip" in transcript_lower:
         return "SKIP"
     if "van" in transcript_lower or "driver" in transcript_lower or "collection" in transcript_lower:
-        return "man in van"
+        return "Man & Van"
     if "complaint" in transcript_lower or "unhappy" in transcript_lower or "dissatisfied" in transcript_lower:
         return "complaint"
     return "general enquiry"
@@ -1222,7 +1243,7 @@ def fetch_and_transcribe_recent_calls():
             log_error("Monitoring loop error", e)
             time.sleep(60)
 
-# --- Twilio Payment Functions ---
+# --- Twilio Functions ---
 def get_twilio_client():
     """Initialize Twilio client"""
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
@@ -1234,6 +1255,27 @@ def get_twilio_client():
     except Exception as e:
         log_error("Failed to initialize Twilio client", e)
         return None
+
+def clean_phone_number(phone_number: str) -> str:
+    """Clean and format phone number for international use"""
+    if not phone_number:
+        return None
+    
+    # Remove spaces, hyphens, and other formatting
+    clean_phone = phone_number.replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
+    
+    # Add country code if needed
+    if not clean_phone.startswith('+'):
+        # Assume UK number if no country code
+        if clean_phone.startswith('0'):
+            clean_phone = '+44' + clean_phone[1:]
+        elif clean_phone.startswith('44'):
+            clean_phone = '+' + clean_phone
+        else:
+            # Default to UK if unclear
+            clean_phone = '+44' + clean_phone
+    
+    return clean_phone
 
 def generate_payment_twiml(amount: float, currency: str, payment_id: str, quote_id: str) -> str:
     """Generate TwiML for Braintree payment processing"""
@@ -1465,9 +1507,9 @@ def get_dashboard_data():
             "follow_up_next_steps": round(avg_resolution_subs[3] or 0, 2),
         }
 
-        # Category ratings
+        # Category ratings - FIXED to include "Man & Van"
         category_ratings = {}
-        categories = ["SKIP", "man in van", "general enquiry", "complaint"] 
+        categories = ["SKIP", "Man & Van", "general enquiry", "complaint"] 
         for cat in categories:
             cursor.execute("SELECT AVG(openai_overall_score), COUNT(*) FROM calls WHERE category = ?", (cat,))
             result = cursor.fetchone()
@@ -1678,7 +1720,7 @@ def get_wasteking_prices_from_api():
         log_with_timestamp("📝 Step 2: Updating booking with search...")
 
         # Step 2: Update the booking to perform a search
-        # Map ElevenLabs service names to WasteKing API names
+        # FIXED: Map ElevenLabs service names to WasteKing API names with "Man & Van" support
         service_mapping = {
             # Skip Hire variations
             "skip hire": "skip",
@@ -1686,10 +1728,10 @@ def get_wasteking_prices_from_api():
             "skips": "skip",
             "skip rental": "skip",
             
-            # Man & Van variations  
+            # Man & Van variations - FIXED to handle ampersand properly
             "man and van": "man-in-van",
-            "man in van": "man-in-van",
-            "man & van": "man-in-van",
+            "man in van": "man-in-van", 
+            "man & van": "man-in-van",  # This handles the ampersand version
             "van": "man-in-van",
             "man with van": "man-in-van",
             "removal van": "man-in-van",
@@ -1805,7 +1847,7 @@ def get_wasteking_prices_from_api():
                 "suggestions": [
                     "Check if you typed the postcode correctly",
                     "Try a nearby postcode in the same area",
-                    f"We may offer other services in {postcode} - try 'skip', 'man-in-van', or 'clearance'",
+                    f"We may offer other services in {postcode} - try 'skip', 'Man & Van', or 'clearance'",
                     "Contact us directly for special arrangements"
                 ],
                 "no_results": True
@@ -1843,6 +1885,111 @@ def get_wasteking_prices_from_api():
         return jsonify({
             "error": f"Unexpected error: {str(e)}",
             "message": "System error occurred. Please contact us directly."
+        }), 500
+
+# NEW SMS PAYMENT ENDPOINT
+@app.route('/api/send-payment-sms', methods=['POST'])
+def send_payment_sms():
+    """
+    Send PayPal payment link via SMS to customer
+    """
+    log_with_timestamp("📱 SMS payment request received")
+    
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        quote_id = data.get('quote_id')
+        customer_phone = data.get('customer_phone')
+        amount = data.get('amount', '1.00')  # Default testing amount
+        
+        log_with_timestamp(f"📱 Sending PayPal SMS to {customer_phone} for quote {quote_id}")
+        
+        if not quote_id or not customer_phone:
+            return jsonify({
+                "error": "Quote ID and customer phone are required",
+                "required_fields": ["quote_id", "customer_phone"]
+            }), 400
+
+        # Clean phone number
+        clean_phone = clean_phone_number(customer_phone)
+        if not clean_phone:
+            return jsonify({
+                "error": "Invalid phone number format",
+                "message": "Please provide a valid phone number."
+            }), 400
+
+        # Check if Twilio is configured
+        if not TWILIO_PHONE_NUMBER or TWILIO_PHONE_NUMBER == 'your_twilio_phone_number':
+            log_error("Twilio phone number not configured")
+            return jsonify({
+                "error": "SMS service not configured",
+                "message": "Unable to send SMS. Please contact us directly."
+            }), 500
+
+        # Initialize Twilio client
+        client = get_twilio_client()
+        if not client:
+            return jsonify({
+                "error": "SMS service unavailable",
+                "message": "Unable to send SMS. Please contact us directly."
+            }), 500
+
+        # Create SMS message
+        message_body = f"""Waste King Payment
+Amount: £{amount}
+Quote: {quote_id}
+
+Pay securely via PayPal:
+{PAYPAL_PAYMENT_LINK}
+
+After payment, call us back to confirm your booking.
+Thank you!"""
+
+        # Send SMS
+        try:
+            message = client.messages.create(
+                body=message_body,
+                from_=TWILIO_PHONE_NUMBER,
+                to=clean_phone
+            )
+            
+            log_with_timestamp(f"✅ SMS sent successfully: {message.sid}")
+            
+            # Store SMS record in database
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO sms_payments (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (quote_id, clean_phone, float(amount), message.sid, datetime.now().isoformat(), PAYPAL_PAYMENT_LINK))
+                conn.commit()
+                conn.close()
+            
+            return jsonify({
+                "status": "success",
+                "message": "Payment link sent via SMS",
+                "sms_sid": message.sid,
+                "phone_number": clean_phone,
+                "amount": amount,
+                "quote_id": quote_id,
+                "timestamp": datetime.now().isoformat()
+            }), 200
+            
+        except Exception as e:
+            log_error("SMS sending failed", e)
+            return jsonify({
+                "error": "SMS delivery failed",
+                "message": f"Unable to send SMS: {str(e)}"
+            }), 500
+
+    except Exception as e:
+        log_error("Error in SMS payment endpoint", e)
+        return jsonify({
+            "error": f"SMS payment request failed: {str(e)}",
+            "message": "Unable to send payment link. Please contact us directly."
         }), 500
 
 @app.route('/api/request-payment', methods=['POST'])
@@ -1904,23 +2051,14 @@ def request_payment():
 
                 # Insert payment request
                 cursor.execute('''
-                    INSERT INTO payments (payment_id, quote_id, booking_ref, amount, currency, created_at, customer_phone, call_sid)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO payments (payment_id, quote_id, booking_ref, amount, currency, created_at, customer_phone, call_sid, elevenlabs_conversation_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     payment_id, quote_id, booking_ref, float(amount), currency, 
-                    datetime.now().isoformat(), customer_phone, call_sid
+                    datetime.now().isoformat(), customer_phone, call_sid, conversation_id
                 ))
                 conn.commit()
                 log_with_timestamp(f"💳 Created payment request {payment_id}")
-
-                # Store conversation ID for later transfer back
-                if conversation_id:
-                    cursor.execute('''
-                        UPDATE payments 
-                        SET elevenlabs_conversation_id = ?
-                        WHERE payment_id = ?
-                    ''', (conversation_id, payment_id))
-                    conn.commit()
 
                 # Actually transfer the call if call_sid is provided
                 if call_sid and call_sid != "pending_from_elevenlabs":
@@ -2073,6 +2211,7 @@ def payment_callback(payment_id):
     <Say voice="alice">Technical issue occurred. Connecting you back to Thomas.</Say>
     <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
 </Response>''', 200, {'Content-Type': 'application/xml'}
+
 @app.route('/twilio/complete-call', methods=['GET', 'POST'])
 def complete_call():
     """Fallback endpoint to complete calls gracefully"""
@@ -2224,6 +2363,41 @@ def get_payments():
         log_error("Error fetching payments", e)
         return jsonify({"error": f"Failed to fetch payments: {str(e)}"}), 500
 
+@app.route('/api/get-sms-payments', methods=['GET'])
+def get_sms_payments():
+    """Get all SMS payment records"""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT s.id, s.quote_id, s.customer_phone, s.amount, s.sms_sid,
+                       s.payment_status, s.created_at, s.paid_at, s.paypal_link,
+                       q.postcode, q.service, q.agent_name, q.booking_ref
+                FROM sms_payments s
+                LEFT JOIN price_quotes q ON s.quote_id = q.quote_id
+                ORDER BY s.created_at DESC
+            ''')
+            
+            sms_payments = []
+            for row in cursor.fetchall():
+                sms_payment = dict(row)
+                sms_payments.append(sms_payment)
+            
+            conn.close()
+            
+            return jsonify({
+                "status": "success",
+                "sms_payments": sms_payments,
+                "count": len(sms_payments),
+                "timestamp": datetime.now().isoformat()
+            })
+
+    except Exception as e:
+        log_error("Error fetching SMS payments", e)
+        return jsonify({"error": f"Failed to fetch SMS payments: {str(e)}"}), 500
+
 @app.route('/api/setup-wasteking', methods=['POST'])
 def setup_wasteking_session():
     """Setup WasteKing authentication"""
@@ -2281,6 +2455,7 @@ def test_twilio_connection():
             "braintree_connector_configured": braintree_connector_found,
             "braintree_connector_sid": BRAINTREE_CONNECTOR_SID,
             "braintree_merchant_id": BRAINTREE_MERCHANT_ID,
+            "twilio_phone_number": TWILIO_PHONE_NUMBER,
             "timestamp": datetime.now().isoformat()
         })
         
@@ -2341,6 +2516,37 @@ def test_call_transfer():
         log_error("Call transfer test failed", e)
         return jsonify({
             "error": f"Test failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
+
+@app.route('/api/test-sms', methods=['POST'])
+def test_sms():
+    """Test SMS functionality"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data provided"}), 400
+            
+        phone_number = data.get('phone_number')
+        if not phone_number:
+            return jsonify({"error": "phone_number is required"}), 400
+        
+        # Test SMS sending
+        test_quote_id = str(uuid.uuid4())
+        test_amount = "1.00"
+        
+        sms_result = send_payment_sms()
+        
+        return jsonify({
+            "status": "success",
+            "message": "SMS test completed",
+            "timestamp": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        log_error("SMS test failed", e)
+        return jsonify({
+            "error": f"SMS test failed: {str(e)}",
             "timestamp": datetime.now().isoformat()
         }), 500
 
