@@ -1825,7 +1825,7 @@ def get_wasteking_prices_from_api():
         }), 200  # ALWAYS 200
 
 # SMS PAYMENT ENDPOINT (NO CALL TRANSFER)
-@app.route('/api/send-payment-sms', methods=['POST'])
+@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
 def send_payment_sms():
     """
     Send PayPal payment link via SMS to customer - NO call transfer, call stays active
