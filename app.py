@@ -1041,7 +1041,7 @@ def categorize_call(transcript: str) -> str:
     if "skip" in transcript_lower:
         return "SKIP"
     if any(word in transcript_lower for word in ["van", "driver", "collection", "man and van", "man & van"]):
-        return "Man & Van"
+        return "mav"
     if "complaint" in transcript_lower or "unhappy" in transcript_lower or "dissatisfied" in transcript_lower:
         return "complaint"
     return "general enquiry"
