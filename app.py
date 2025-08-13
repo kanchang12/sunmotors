@@ -1824,31 +1824,76 @@ def get_wasteking_prices_from_api():
             "timestamp": datetime.now().isoformat()
         }), 200  # ALWAYS 200
 
-# SMS PAYMENT ENDPOINT (NO CALL TRANSFER)
-@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
-def send_payment_sms():
+@app.route('/api/debug-request', methods=['POST', 'GET', 'PUT', 'PATCH'])
+def debug_request():
     """
-    Send PayPal payment link via SMS to customer - NO call transfer, call stays active
+    Debug endpoint to see exactly what data is being received
     """
-    log_with_timestamp("📱 SMS payment request received - NO call transfer")
+    debug_info = {
+        "method": request.method,
+        "content_type": request.content_type,
+        "headers": dict(request.headers),
+        "is_json": request.is_json,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    # Try to get data in different ways
+    try:
+        if request.is_json and request.json:
+            debug_info["json_data"] = request.json
+    except:
+        debug_info["json_error"] = "Failed to parse JSON"
     
     try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
+        if request.form:
+            debug_info["form_data"] = request.form.to_dict()
+    except:
+        debug_info["form_error"] = "Failed to parse form data"
+    
+    try:
+        if request.args:
+            debug_info["query_params"] = request.args.to_dict()
+    except:
+        debug_info["args_error"] = "Failed to parse query params"
+    
+    try:
+        if request.data:
+            debug_info["raw_data"] = request.data.decode('utf-8')[:500]  # First 500 chars
+    except:
+        debug_info["raw_data_error"] = "Failed to get raw data"
+    
+    log_with_timestamp(f"🔍 Debug request: {debug_info}")
+    
+    return jsonify({
+        "status": "debug_success",
+        "message": "Request received and analyzed",
+        "debug_info": debug_info
+    })
 
-        quote_id = data.get('quote_id')
-        customer_phone = data.get('customer_phone')
-        amount = data.get('amount', '1.00')  # Default testing amount
-        
-        log_with_timestamp(f"📱 Sending PayPal SMS to {customer_phone} for quote {quote_id}, amount: £{amount}")
-        
-        if not quote_id or not customer_phone:
-            return jsonify({
-                "error": "Quote ID and customer phone are required",
-                "required_fields": ["quote_id", "customer_phone"]
-            }), 400
+@app.route('/api/test-sms-simple', methods=['GET'])
+def test_sms_simple():
+    """
+    Simple GET endpoint to test SMS with query parameters
+    Usage: /api/test-sms-simple?quote_id=WK123456&customer_phone=+447123456789&amount=25.00
+    """
+    quote_id = request.args.get('quote_id', 'TEST123456')
+    customer_phone = request.args.get('customer_phone')
+    amount = request.args.get('amount', '1.00')
+    
+    if not customer_phone:
+        return jsonify({
+            "error": "customer_phone is required",
+            "usage": "/api/test-sms-simple?quote_id=WK123456&customer_phone=+447123456789&amount=25.00"
+        }), 400
+    
+    # Use the fixed SMS function logic
+    return send_payment_sms_internal(quote_id, customer_phone, amount)
 
+def send_payment_sms_internal(quote_id, customer_phone, amount):
+    """
+    Internal function to send SMS (reusable)
+    """
+    try:
         # Clean phone number
         clean_phone = clean_phone_number(customer_phone)
         if not clean_phone:
@@ -1857,23 +1902,22 @@ def send_payment_sms():
                 "message": "Please provide a valid phone number."
             }), 400
 
-        # Check if Twilio is configured
+        # Check Twilio configuration
         if not TWILIO_PHONE_NUMBER or TWILIO_PHONE_NUMBER == 'your_twilio_phone_number':
-            log_error("Twilio phone number not configured")
             return jsonify({
                 "error": "SMS service not configured",
-                "message": "Unable to send SMS. Please contact us directly."
+                "message": "Twilio phone number not set up"
             }), 500
 
-        # Initialize Twilio client
+        # Get Twilio client
         client = get_twilio_client()
         if not client:
             return jsonify({
-                "error": "SMS service unavailable",
-                "message": "Unable to send SMS. Please contact us directly."
+                "error": "SMS service unavailable", 
+                "message": "Twilio client initialization failed"
             }), 500
 
-        # Create SMS message with SHORT reference
+        # Create and send SMS
         message_body = f"""Waste King Payment
 Amount: £{amount}
 Quote: {quote_id}
@@ -1881,54 +1925,40 @@ Quote: {quote_id}
 Pay securely via PayPal:
 {PAYPAL_PAYMENT_LINK}
 
-After payment, you'll get automatic confirmation.
+After payment, you'll get confirmation.
 Thank you!"""
 
-        # Send SMS
-        try:
-            message = client.messages.create(
-                body=message_body,
-                from_=TWILIO_PHONE_NUMBER,
-                to=clean_phone
-            )
-            
-            log_with_timestamp(f"✅ SMS sent successfully: {message.sid}")
-            
-            # Store SMS record in database
-            with db_lock:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO sms_payments (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (quote_id, clean_phone, float(amount), message.sid, datetime.now().isoformat(), PAYPAL_PAYMENT_LINK))
-                conn.commit()
-                conn.close()
-            
-            return jsonify({
-                "status": "success",
-                "message": f"Payment link sent via SMS to {customer_phone}. Quote reference {quote_id}. Call stays active - no transfer needed.",
-                "sms_sid": message.sid,
-                "phone_number": clean_phone,
-                "amount": amount,
-                "quote_id": quote_id,
-                "call_continues": True,  # KEY: Call stays active
-                "no_callback_needed": True,  # NEW: No callback required
-                "timestamp": datetime.now().isoformat()
-            }), 200
-            
-        except Exception as e:
-            log_error("SMS sending failed", e)
-            return jsonify({
-                "error": "SMS delivery failed",
-                "message": f"Unable to send SMS: {str(e)}"
-            }), 500
-
-    except Exception as e:
-        log_error("Error in SMS payment endpoint", e)
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=clean_phone
+        )
+        
+        log_with_timestamp(f"✅ SMS sent: {message.sid}")
+        
+        # Store in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (quote_id, clean_phone, float(amount), message.sid, datetime.now().isoformat(), PAYPAL_PAYMENT_LINK))
+            conn.commit()
+            conn.close()
+        
         return jsonify({
-            "error": f"SMS payment request failed: {str(e)}",
-            "message": "Unable to send payment link. Please contact us directly."
+            "status": "success",
+            "message": f"SMS sent to {clean_phone}",
+            "sms_sid": message.sid,
+            "quote_id": quote_id,
+            "amount": amount
+        })
+        
+    except Exception as e:
+        log_error("SMS sending failed", e)
+        return jsonify({
+            "error": f"SMS failed: {str(e)}"
         }), 500
 
 # PAYMENT WEBHOOK (automatic confirmation)
