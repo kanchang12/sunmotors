@@ -2035,53 +2035,44 @@ def payment_callback(payment_id):
         # Get payment status from request
         payment_status = request.form.get('payment_status', 'failed')
         
-        # Get database connection
-        cursor = get_db_cursor()
+        # Connect to database (use your existing method)
+        conn = sqlite3.connect('calls.db')
+        cursor = conn.cursor()
         
-        # Update payment status in database
+        # Update payment status
         cursor.execute(
             "UPDATE payments SET status = ? WHERE payment_id = ?",
             (payment_status, payment_id)
         )
-        
-        # Get payment details
-        cursor.execute(
-            "SELECT quote_id, call_sid, elevenlabs_conversation_id FROM payments WHERE payment_id = ?", 
-            (payment_id,)
-        )
-        result = cursor.fetchone()
-        
-        cursor.connection.commit()
-        cursor.close()
+        conn.commit()
+        conn.close()
         
         if payment_status == 'completed' or payment_status == 'success':
             print(f"✅ Payment {payment_id} successful")
             
-            # Return TwiML to continue with Thomas
+            # Return TwiML to continue with Thomas - WITH CONTEXT
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Payment completed successfully. Let me finalize your booking.</Say>
-    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
-</Response>''', 200, {'Content-Type': 'application/xml'}
+    <Say voice="alice">Payment completed successfully. Connecting you back to Thomas to finalize your booking.</Say>
+    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp&payment_completed=true&payment_id={}</Redirect>
+</Response>'''.format(payment_id), 200, {'Content-Type': 'application/xml'}
         
         else:
             print(f"❌ Payment {payment_id} failed: {payment_status}")
             
-            # Payment failed - return to Thomas or transfer to human
             return '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Payment could not be processed. Let me connect you with our sales team to help you.</Say>
-    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
-</Response>''', 200, {'Content-Type': 'application/xml'}
+    <Say voice="alice">Payment could not be processed. Connecting you back to Thomas for assistance.</Say>
+    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp&payment_failed=true&payment_id={}</Redirect>
+</Response>'''.format(payment_id), 200, {'Content-Type': 'application/xml'}
             
     except Exception as e:
         print(f"❌ Payment callback error: {e}")
         
-        # Error handling - return to Thomas
         return '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">There was a technical issue. Let me help you complete your booking.</Say>
-    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp</Redirect>
+    <Say voice="alice">Technical issue occurred. Connecting you back to Thomas.</Say>
+    <Redirect>https://api.elevenlabs.io/v1/convai/conversation/webhook?agent_id=agent_01k073ee5re4rvhzpqx4mh23rp&payment_error=true</Redirect>
 </Response>''', 200, {'Content-Type': 'application/xml'}
 
 @app.route('/twilio/complete-call', methods=['GET', 'POST'])
