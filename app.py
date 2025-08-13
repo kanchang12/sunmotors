@@ -447,7 +447,7 @@ def authenticate_wasteking():
         }
 
 def get_wasteking_prices():
-    """Get WasteKing pricing data"""
+    """Get WasteKing pricing data and booking reference"""
     try:
         log_with_timestamp("💰 Fetching WasteKing prices...")
         
@@ -473,12 +473,32 @@ def get_wasteking_prices():
         response = session.get(WASTEKING_PRICING_URL, timeout=15)
         
         if response.status_code == 200:
-            return {
-                "status": "success",
-                "timestamp": datetime.now().isoformat(),
-                "message": "WasteKing data fetched successfully",
-                "data_length": len(response.text)
-            }
+            try:
+                wasteking_data = response.json()
+                booking_id = wasteking_data.get('booking_reference')
+                
+                if not booking_id:
+                    # Generate a booking ID if not provided by API
+                    booking_id = generate_booking_id()
+                    log_with_timestamp(f"Generated booking ID: {booking_id}")
+                
+                return {
+                    "status": "success",
+                    "booking_id": booking_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "message": "WasteKing data fetched successfully",
+                    "data": wasteking_data,
+                    "data_length": len(response.text)
+                }
+                
+            except ValueError as e:
+                log_error("Failed to parse WasteKing response", e)
+                return {
+                    "error": "Invalid response format",
+                    "status": "parse_error",
+                    "timestamp": datetime.now().isoformat()
+                }
+                
         elif response.status_code in [401, 403]:
             # Try re-authentication
             auth_result = authenticate_wasteking()
@@ -491,10 +511,13 @@ def get_wasteking_prices():
             if session:
                 response = session.get(WASTEKING_PRICING_URL, timeout=15)
                 if response.status_code == 200:
+                    wasteking_data = response.json()
                     return {
                         "status": "success",
+                        "booking_id": wasteking_data.get('booking_reference'),
                         "message": "Re-authenticated and fetched data",
                         "timestamp": datetime.now().isoformat(),
+                        "data": wasteking_data,
                         "data_length": len(response.text)
                     }
             
