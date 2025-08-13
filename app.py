@@ -184,7 +184,7 @@ def init_db():
             )
         ''')
         
-        # Updated price_quotes table with status column
+        # Updated price_quotes table with elevenlabs_conversation_id
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS price_quotes (
                 quote_id TEXT PRIMARY KEY,
@@ -201,7 +201,7 @@ def init_db():
             )
         ''')
         
-        # SMS payments table (NO call transfer payments needed)
+        # FIXED: SMS payments table with call_sid and elevenlabs_conversation_id columns
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sms_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,9 +214,31 @@ def init_db():
                 paid_at TEXT,
                 paypal_link TEXT,
                 booking_confirmed BOOLEAN DEFAULT 0,
+                call_sid TEXT,
+                elevenlabs_conversation_id TEXT,
                 FOREIGN KEY (quote_id) REFERENCES price_quotes (quote_id)
             )
         ''')
+        
+        # Check if columns need to be added to existing tables
+        cursor.execute("PRAGMA table_info(sms_payments)")
+        existing_columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'call_sid' not in existing_columns:
+            log_with_timestamp("Adding call_sid column to sms_payments table...")
+            cursor.execute("ALTER TABLE sms_payments ADD COLUMN call_sid TEXT")
+        
+        if 'elevenlabs_conversation_id' not in existing_columns:
+            log_with_timestamp("Adding elevenlabs_conversation_id column to sms_payments table...")
+            cursor.execute("ALTER TABLE sms_payments ADD COLUMN elevenlabs_conversation_id TEXT")
+        
+        # Check price_quotes table for missing columns
+        cursor.execute("PRAGMA table_info(price_quotes)")
+        existing_quote_columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'elevenlabs_conversation_id' not in existing_quote_columns:
+            log_with_timestamp("Adding elevenlabs_conversation_id column to price_quotes table...")
+            cursor.execute("ALTER TABLE price_quotes ADD COLUMN elevenlabs_conversation_id TEXT")
         
         conn.commit()
         conn.close()
@@ -479,7 +501,7 @@ def get_wasteking_prices():
                 
                 if not booking_id:
                     # Generate a booking ID if not provided by API
-                    booking_id = generate_booking_id()
+                    booking_id = generate_short_id("WK")
                     log_with_timestamp(f"Generated booking ID: {booking_id}")
                 
                 return {
@@ -1653,7 +1675,7 @@ def get_calls_list():
 
 @app.route('/api/get-wasteking-prices', methods=['POST'])
 def get_wasteking_prices_from_api():
-    """Get WasteKing pricing - FIXED service mapping and SMS endpoint"""
+    """Get WasteKing pricing - FIXED to use actual booking reference from API"""
     log_with_timestamp("📞 ElevenLabs called WasteKing price endpoint")
     
     try:
@@ -1777,6 +1799,10 @@ def get_wasteking_prices_from_api():
                 "timestamp": datetime.now().isoformat()
             }), 200
 
+        # FIXED: Use the actual booking_ref as the quote_id instead of generating a short ID
+        quote_id = booking_ref  # This is the long number from WasteKing API
+        log_with_timestamp(f"✅ Using WasteKing booking reference as quote ID: {quote_id}")
+
         # Step 2: Update booking with search
         update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
         update_payload = {
@@ -1790,21 +1816,23 @@ def get_wasteking_prices_from_api():
         update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20, verify=False)
         update_data = update_response.json()
 
-        # Generate quote ID and store
-        quote_id = generate_short_id("WK")
+        # Store using the actual booking reference
         customer_phone = data.get('Phone', 'Unknown')
         agent_name = data.get('agent_name', 'Thomas')
+        call_sid = data.get('call_sid', 'Unknown')
+        elevenlabs_conversation_id = data.get('elevenlabs_conversation_id', 'Unknown')
 
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, customer_phone, agent_name, status, call_sid, elevenlabs_conversation_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 quote_id, booking_ref, postcode, wasteking_service, json.dumps(update_data), 
                 datetime.now().isoformat(), customer_phone, agent_name, 
-                'no_results' if update_response.status_code != 200 else 'pending'
+                'no_results' if update_response.status_code != 200 else 'pending',
+                call_sid, elevenlabs_conversation_id
             ))
             conn.commit()
             conn.close()
@@ -1813,7 +1841,7 @@ def get_wasteking_prices_from_api():
         if update_response.status_code == 200:
             return jsonify({
                 "status": "success",
-                "quote_id": quote_id,
+                "quote_id": quote_id,  # This is now the long booking reference
                 "message": f"I can offer you {wasteking_service} service for {postcode}. Your quote reference is {quote_id}. Would you like me to proceed with booking?",
                 "has_pricing": True,
                 "pricing_available": True,
@@ -1826,7 +1854,7 @@ def get_wasteking_prices_from_api():
         else:
             return jsonify({
                 "status": "success",
-                "quote_id": quote_id,
+                "quote_id": quote_id,  # Still use the real booking reference even for no results
                 "message": f"I'm sorry, we don't currently offer {wasteking_service} service in {postcode}. Let me transfer you to our specialist team.",
                 "has_pricing": False,
                 "pricing_available": False,
@@ -1838,7 +1866,7 @@ def get_wasteking_prices_from_api():
         log_error("WasteKing API error", e)
         return jsonify({
             "status": "success",
-            "quote_id": generate_short_id("WK"),
+            "quote_id": generate_short_id("WK"),  # Fallback to short ID only on error
             "message": "Let me transfer you to our team who can help you with pricing.",
             "has_pricing": False,
             "should_transfer": True,
@@ -1847,7 +1875,7 @@ def get_wasteking_prices_from_api():
 
 @app.route('/api/send-payment-sms', methods=['POST'])
 def send_payment_sms():
-    """Handle payment requests from ElevenLabs"""
+    """Handle payment requests from ElevenLabs - FIXED database schema"""
     try:
         # 1. Parse incoming JSON
         data = request.get_json()
@@ -1890,29 +1918,34 @@ def send_payment_sms():
         # 4. Force £1 amount as specified
         amount = "1.00"
 
-        # 5. Send SMS via Twilio
+        # 5. Get quote_id from the call_sid or use it directly
+        quote_id = data.get('quote_id', data['call_sid'])
+
+        # 6. Send SMS via Twilio
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         message = client.messages.create(
-            body=f"Waste King Payment\nAmount: £{amount}\nReference: {data['call_sid']}\nPay now: {PAYPAL_PAYMENT_LINK}",
+            body=f"Waste King Payment\nAmount: £{amount}\nReference: {quote_id}\nPay now: {PAYPAL_PAYMENT_LINK}",
             from_=TWILIO_PHONE_NUMBER,
             to=phone
         )
 
-        # 6. Store in database
+        # 7. Store in database with FIXED schema
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO sms_payments 
-                (quote_id, customer_phone, amount, sms_sid, call_sid, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?)
+                (quote_id, customer_phone, amount, sms_sid, call_sid, elevenlabs_conversation_id, created_at, paypal_link) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                f"WK-{datetime.now().strftime('%Y%m%d')}",
+                quote_id,
                 phone,
                 float(amount),
                 message.sid,
                 data['call_sid'],
-                datetime.now().isoformat()
+                data.get('elevenlabs_conversation_id', 'Unknown'),
+                datetime.now().isoformat(),
+                PAYPAL_PAYMENT_LINK
             ))
             conn.commit()
             conn.close()
@@ -1921,7 +1954,8 @@ def send_payment_sms():
             "status": "success",
             "message": f"SMS sent to {phone}",
             "amount": f"£{amount}",
-            "call_sid": data['call_sid']
+            "call_sid": data['call_sid'],
+            "quote_id": quote_id
         })
 
     except Exception as e:
@@ -1943,7 +1977,7 @@ def get_quotes():
             
             cursor.execute('''
                 SELECT q.quote_id, q.booking_ref, q.postcode, q.service, q.created_at, 
-                       q.status, q.customer_phone, q.agent_name,
+                       q.status, q.customer_phone, q.agent_name, q.call_sid, q.elevenlabs_conversation_id,
                        s.amount, s.sms_sid, s.payment_status, s.paid_at
                 FROM price_quotes q
                 LEFT JOIN sms_payments s ON q.quote_id = s.quote_id
@@ -1974,6 +2008,7 @@ def get_sms_payments():
             cursor.execute('''
                 SELECT s.id, s.quote_id, s.customer_phone, s.amount, s.sms_sid,
                        s.payment_status, s.created_at, s.paid_at, s.paypal_link,
+                       s.call_sid, s.elevenlabs_conversation_id,
                        q.postcode, q.service, q.agent_name, q.booking_ref
                 FROM sms_payments s
                 LEFT JOIN price_quotes q ON s.quote_id = q.quote_id
@@ -2231,7 +2266,7 @@ def health_check():
         "status": "healthy",
         "service": "waste-king-api",
         "timestamp": datetime.now().isoformat(),
-        "version": "3.0-complete-fixed"
+        "version": "3.1-fixed-booking-refs"
     })
 
 @app.route('/api/debug-request', methods=['POST', 'GET', 'PUT', 'PATCH'])
@@ -2329,7 +2364,7 @@ if __name__ == '__main__':
     # Development only - production uses gunicorn
     port = int(os.environ.get("PORT", 5000))
     log_with_timestamp(f"🚀 Starting Waste King API server on port {port}")
-    log_with_timestamp("✅ COMPLETE REWRITE - All features included:")
+    log_with_timestamp("✅ COMPLETE FIXED VERSION - All features included:")
     log_with_timestamp("  • Call transcription and monitoring")
     log_with_timestamp("  • OpenAI analysis and scoring")
     log_with_timestamp("  • WasteKing pricing API integration")
@@ -2339,5 +2374,7 @@ if __name__ == '__main__':
     log_with_timestamp("  • FIXED: Service mapping uses 'mav'")
     log_with_timestamp("  • FIXED: Collections category added")
     log_with_timestamp("  • FIXED: SMS endpoint works with all content types")
-    log_with_timestamp("  • REMOVED: Old /api/request-payment endpoint")
+    log_with_timestamp("  • FIXED: Database schema includes call_sid and elevenlabs_conversation_id")
+    log_with_timestamp("  • FIXED: Uses actual WasteKing booking reference as quote_id")
+    log_with_timestamp("  • FIXED: All database column mismatches resolved")
     app.run(debug=False, host='0.0.0.0', port=port)
