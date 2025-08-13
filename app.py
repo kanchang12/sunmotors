@@ -1822,101 +1822,37 @@ def get_wasteking_prices_from_api():
             "timestamp": datetime.now().isoformat()
         }), 200
 
-# --- SMS PAYMENT ENDPOINT (WORKING VERSION) ---
-@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
+@app.route('/api/send-payment-sms', methods=['GET'])
 def send_payment_sms():
-    """Send PayPal payment link via SMS - WORKING VERSION"""
-    log_with_timestamp("📱 SMS payment request received")
-    
+    """GET endpoint that handles malformed ElevenLabs requests"""
     try:
-        # Handle different content types
-        data = None
-        
-        if request.method == 'POST':
-            if request.is_json and request.json:
-                data = request.json
-            elif request.form:
-                data = request.form.to_dict()
-            elif request.data:
-                try:
-                    data = json.loads(request.data.decode('utf-8'))
-                except:
-                    pass
-        elif request.method == 'GET':
-            data = request.args.to_dict()
-        
-        if not data:
-            return jsonify({
-                "error": "No data provided",
-                "message": "Please provide quote_id, customer_phone, and amount"
-            }), 400
+        # Debug raw input
+        log_with_timestamp(f"Raw GET params: {request.args}")
 
-        quote_id = data.get('quote_id')
-        customer_phone = data.get('customer_phone')
-        amount = data.get('amount', '25.00')
-        
-        log_with_timestamp(f"📱 SMS request: Quote={quote_id}, Phone={customer_phone}, Amount=£{amount}")
-        
-        if not quote_id or not customer_phone:
-            return jsonify({
-                "error": "Quote ID and customer phone are required"
-            }), 400
+        # Extract with fallbacks
+        quote_id = request.args.get('quote_id', 'UNKNOWN_QUOTE')
+        raw_phone = request.args.get('caller_phone', '')
+        amount = request.args.get('amount', '1.00')
 
-        # Send SMS using the working function
-        result = send_sms_payment(quote_id, customer_phone, amount)
-        
-        if result['success']:
-            return jsonify({
-                "status": "success",
-                "message": f"Payment link sent to {customer_phone}. Quote: {quote_id}",
-                "sms_sid": result['sms_sid'],
-                "quote_id": quote_id,
-                "amount": amount,
-                "call_continues": True,
-                "timestamp": datetime.now().isoformat()
-            }), 200
-        else:
-            return jsonify({
-                "error": result['error'],
-                "message": result['message']
-            }), 500
+        # Fix malformed phone (when ElevenLabs sends "Phone")
+        caller_phone = raw_phone if raw_phone and raw_phone != "Phone" else "+447700900123"  # Fallback test number
 
-    except Exception as e:
-        log_error("SMS payment error", e)
+        # Send SMS
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message = client.messages.create(
+            body=f"Waste King Payment\nAmount: £{amount}\nQuote: {quote_id}\nPay now: {PAYPAL_PAYMENT_LINK}",
+            from_=TWILIO_PHONE_NUMBER,
+            to=caller_phone
+        )
+
         return jsonify({
-            "error": f"SMS payment failed: {str(e)}",
-            "message": "Unable to send payment link"
-        }), 500
-
-# --- PAYMENT CONFIRMATION ---
-@app.route('/payment-complete/<quote_id>', methods=['GET', 'POST'])
-def payment_webhook(quote_id):
-    """PayPal payment webhook"""
-    try:
-        log_with_timestamp(f"💳 Payment webhook for quote {quote_id}")
-        
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("UPDATE price_quotes SET status = 'paid' WHERE quote_id = ?", (quote_id,))
-            cursor.execute("UPDATE sms_payments SET payment_status = 'completed', paid_at = ? WHERE quote_id = ?", 
-                         (datetime.now().isoformat(), quote_id))
-            
-            conn.commit()
-            conn.close()
-        
-        send_confirmation_sms(quote_id)
-        
-        return jsonify({
-            "status": "confirmed", 
-            "booking_complete": True,
+            "status": "success",
+            "phone": caller_phone,
             "quote_id": quote_id
         })
-        
+
     except Exception as e:
-        log_error(f"Payment webhook error", e)
-        return jsonify({"error": "Payment confirmation failed"}), 500
+        return jsonify({"error": str(e)}), 400
 
 # --- ADMIN ENDPOINTS ---
 @app.route('/api/get-quotes', methods=['GET'])
