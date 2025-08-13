@@ -1769,7 +1769,7 @@ def get_wasteking_prices_from_api():
 
         # Generate quote ID and store
         quote_id = generate_short_id("WK")
-        customer_phone = data.get('customer_phone', 'Unknown')
+        customer_phone = data.get('Phone', 'Unknown')
         agent_name = data.get('agent_name', 'Thomas')
 
         with db_lock:
