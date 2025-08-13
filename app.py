@@ -1822,80 +1822,70 @@ def get_wasteking_prices_from_api():
             "timestamp": datetime.now().isoformat()
         }), 200
 
-@app.route('/api/send-payment-sms', methods=['GET', 'POST'])
+# --- SMS PAYMENT ENDPOINT (WORKING VERSION) ---
+@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
 def send_payment_sms():
-    """Handle payment requests and send SMS with PayPal link"""
+    """Send PayPal payment link via SMS - WORKING VERSION"""
+    log_with_timestamp("📱 SMS payment request received")
+    
     try:
-        # Parse incoming request
-        if request.method == 'GET':
-            data = request.args.to_dict()
-        else:
-            data = request.get_json() if request.is_json else request.form.to_dict()
-
-        # Validate required fields
-        required_fields = {
-            'call_sid': 'Call SID',
-            'quote_id': 'Quote ID', 
-            'caller_phone': 'Phone number'
-        }
+        # Handle different content types
+        data = None
         
-        missing_fields = [name for field, name in required_fields.items() if not data.get(field)]
-        if missing_fields:
+        if request.method == 'POST':
+            if request.is_json and request.json:
+                data = request.json
+            elif request.form:
+                data = request.form.to_dict()
+            elif request.data:
+                try:
+                    data = json.loads(request.data.decode('utf-8'))
+                except:
+                    pass
+        elif request.method == 'GET':
+            data = request.args.to_dict()
+        
+        if not data:
             return jsonify({
-                "error": f"Missing required fields: {', '.join(missing_fields)}",
-                "received_data": data
+                "error": "No data provided",
+                "message": "Please provide quote_id, customer_phone, and amount"
             }), 400
 
-        # Clean and validate phone number
-        phone = data['caller_phone'].strip()
-        if not phone.startswith('+'):
-            phone = f"+44{phone.lstrip('0')}" if phone.startswith('0') else f"+{phone}"
-
-        # Get amount or default to £1
-        amount = data.get('amount', '1.00')
+        quote_id = data.get('quote_id')
+        customer_phone = data.get('customer_phone')
+        amount = data.get('amount', '25.00')
         
-        # Initialize Twilio client
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        log_with_timestamp(f"📱 SMS request: Quote={quote_id}, Phone={customer_phone}, Amount=£{amount}")
         
-        # Send SMS
-        message = client.messages.create(
-            body=f"Waste King Payment\nAmount: £{amount}\nQuote: {data['quote_id']}\n\nPay securely: {PAYPAL_PAYMENT_LINK}",
-            from_=TWILIO_PHONE_NUMBER,
-            to=phone
-        )
+        if not quote_id or not customer_phone:
+            return jsonify({
+                "error": "Quote ID and customer phone are required"
+            }), 400
 
-        # Store in database
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO sms_payments 
-                (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link) 
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                data['quote_id'],
-                phone,
-                float(amount),
-                message.sid,
-                datetime.now().isoformat(),
-                PAYPAL_PAYMENT_LINK
-            ))
-            conn.commit()
-            conn.close()
-
-        log_with_timestamp(f"✅ SMS sent to {phone} for quote {data['quote_id']}")
-        return jsonify({
-            "status": "success",
-            "message": f"Payment link sent to {phone}",
-            "sms_sid": message.sid,
-            "quote_id": data['quote_id']
-        })
+        # Send SMS using the working function
+        result = send_sms_payment(quote_id, customer_phone, amount)
+        
+        if result['success']:
+            return jsonify({
+                "status": "success",
+                "message": f"Payment link sent to {customer_phone}. Quote: {quote_id}",
+                "sms_sid": result['sms_sid'],
+                "quote_id": quote_id,
+                "amount": amount,
+                "call_continues": True,
+                "timestamp": datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                "error": result['error'],
+                "message": result['message']
+            }), 500
 
     except Exception as e:
-        log_error("Payment processing failed", e)
+        log_error("SMS payment error", e)
         return jsonify({
-            "error": "Failed to process payment",
-            "details": str(e)
+            "error": f"SMS payment failed: {str(e)}",
+            "message": "Unable to send payment link"
         }), 500
 
 # --- PAYMENT CONFIRMATION ---
