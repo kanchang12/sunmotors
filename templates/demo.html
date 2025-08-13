@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Waste King Chatbot Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .header {
+            text-align: center;
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            padding: 40px 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+        .section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #28a745;
+        }
+        .code-block {
+            background: #f1f3f4;
+            border: 1px solid #dadce0;
+            border-radius: 4px;
+            padding: 16px;
+            font-family: monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+            color: #0c5460;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .feature {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🗑️ Waste King Chatbot Demo</h1>
+        <p>AI-powered customer service for waste removal</p>
+    </div>
+
+    <div class="success">
+        <strong>✅ Chatbot Active!</strong> Look for the green chat button in the bottom right corner.
+        Click it to start chatting with Thomas!
+    </div>
+
+    <div class="section">
+        <h2>🚀 How It Works</h2>
+        <p>This page demonstrates the Waste King chatbot widget. The chatbot will:</p>
+        <div class="feature-list">
+            <div class="feature">
+                <strong>💬 Chat Interface</strong><br>
+                Natural conversation with "Thomas"
+            </div>
+            <div class="feature">
+                <strong>📋 Service Selection</strong><br>
+                Skip hire, Man & Van, Grab hire
+            </div>
+            <div class="feature">
+                <strong>💰 Live Pricing</strong><br>
+                Real-time quotes from WasteKing API
+            </div>
+            <div class="feature">
+                <strong>📱 SMS Payments</strong><br>
+                PayPal payment links via SMS
+            </div>
+            <div class="feature">
+                <strong>📊 Analytics</strong><br>
+                All conversations tracked in dashboard
+            </div>
+            <div class="feature">
+                <strong>🎨 Customizable</strong><br>
+                Colors, position, messages
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🧪 Test the Chatbot</h2>
+        <p>Try these example conversations:</p>
+        <ul>
+            <li><strong>"I need a skip"</strong> - Quick skip hire booking</li>
+            <li><strong>"Man and van service"</strong> - Collection service</li>
+            <li><strong>"Get a quote"</strong> - General pricing inquiry</li>
+            <li><strong>"I have a complaint"</strong> - Escalation trigger</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>📋 Installation Code</h2>
+        <p>To add this chatbot to any website, just include this single line before the closing <code>&lt;/body&gt;</code> tag:</p>
+        
+        <h3>Basic Installation:</h3>
+        <div class="code-block">&lt;script src="https://your-domain.com/waste-king-chatbot.js"&gt;&lt;/script&gt;</div>
+        
+        <h3>With Custom Configuration:</h3>
+        <div class="code-block">&lt;script&gt;
+window.WasteKingConfig = {
+    position: 'bottom-left',        // bottom-right, bottom-left, top-right, top-left
+    primaryColor: '#007bff',        // Your brand color
+    secondaryColor: '#0056b3',      // Secondary color
+    phoneNumber: '01234 567890',    // Your contact number
+    welcomeMessage: "Hello! I'm Thomas from Waste King. How can I help?",
+    welcomeDelay: 3000              // 3 seconds
+};
+&lt;/script&gt;
+&lt;script src="https://your-domain.com/waste-king-chatbot.js"&gt;&lt;/script&gt;</div>
+    </div>
+
+    <div class="section">
+        <h2>🔧 Backend Integration</h2>
+        <p>The chatbot connects to your backend server for:</p>
+        <ul>
+            <li><strong>Live Pricing API:</strong> <code>https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app/api/get-wasteking-prices</code></li>
+            <li><strong>SMS Payments:</strong> <code>https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app/api/send-payment-sms</code></li>
+            <li><strong>Dashboard:</strong> <code>https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app/</code></li>
+        </ul>
+    </div>
+
+    <div class="info">
+        <strong>📱 Mobile Responsive:</strong> The chatbot automatically adapts to mobile devices and different screen sizes.
+    </div>
+
+    <div class="section">
+        <h2>🌐 Platform Support</h2>
+        <p>Works on all major platforms:</p>
+        <div class="feature-list">
+            <div class="feature">
+                <strong>WordPress</strong><br>
+                Add to footer.php or use plugins
+            </div>
+            <div class="feature">
+                <strong>Shopify</strong><br>
+                Add to theme.liquid
+            </div>
+            <div class="feature">
+                <strong>Squarespace</strong><br>
+                Code injection in footer
+            </div>
+            <div class="feature">
+                <strong>HTML/Static</strong><br>
+                Direct script tag inclusion
+            </div>
+        </div>
+    </div>
+
+    <!-- Waste King Chatbot Widget -->
+    <!-- This is the actual implementation - just one line! -->
+    <script src="./waste-king-chatbot.js"></script>
+</body>
+</html>
