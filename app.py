@@ -99,8 +99,9 @@ processing_stats = {
 }
 
 def generate_short_id(prefix="WK"):
-    """Generate SHORT 6-digit reference instead of UUID"""
-    return f"{prefix}{random.randint(100000, 999999)}"
+    result = get_wasteking_prices()
+    if result.get('status') == 'success':
+        quote_id = result['booking_id']
 
 def log_with_timestamp(message, level="INFO"):
     """Enhanced logging with timestamps and levels"""
@@ -2281,7 +2282,7 @@ def debug_request():
 @app.route('/api/test-sms-simple', methods=['GET'])
 def test_sms_simple():
     """Simple GET endpoint to test SMS with query parameters"""
-    quote_id = request.args.get('quote_id', 'TEST123456')
+    quote_id = request.args.get('quote_id')
     customer_phone = request.args.get('customer_phone')
     amount = request.args.get('amount', '1.00')
     
