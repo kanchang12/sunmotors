@@ -1563,11 +1563,12 @@ def get_calls_list():
 
 # --- PRICING AND PAYMENT ENDPOINTS ---
 
+# URGENT FIX - Replace the get_wasteking_prices_from_api function with this:
+
 @app.route('/api/get-wasteking-prices', methods=['POST'])
 def get_wasteking_prices_from_api():
     """
-    Handles requests from Eleven Labs, fetches live pricing from WasteKing
-    FIXED: Better Man & Van recognition and SHORT quote IDs
+    FIXED: Proper response format for ElevenLabs - no more call disconnections
     """
     log_with_timestamp("📞 ElevenLabs called WasteKing price endpoint")
     
@@ -1597,12 +1598,10 @@ def get_wasteking_prices_from_api():
             log_with_timestamp(f"❌ Invalid postcode format: {postcode}")
             return jsonify({
                 "status": "error",
-                "quote_id": generate_short_id(),
                 "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED' or 'M1 1AA'.",
-                "error": "Invalid postcode format",
-                "example_postcodes": ["LS1 4ED", "M1 1AA", "EC1A 1BB"],
+                "quote_id": generate_short_id("WK"),
                 "timestamp": datetime.now().isoformat()
-            }), 400
+            }), 200  # ALWAYS 200 for ElevenLabs
 
         # Re-format postcode properly (add space if missing)
         if len(postcode_clean) >= 5:
@@ -1633,26 +1632,32 @@ def get_wasteking_prices_from_api():
         if create_response.status_code != 200:
             log_with_timestamp(f"❌ Create failed: {create_response.text}")
             return jsonify({
-                "error": f"Failed to create booking: {create_response.status_code}",
-                "details": create_response.text
-            }), 500
+                "status": "error",
+                "message": "Unable to get pricing at this time. Please contact us directly on 0800 123 4567.",
+                "quote_id": generate_short_id("WK"),
+                "timestamp": datetime.now().isoformat()
+            }), 200  # ALWAYS 200 for ElevenLabs
 
         create_data = create_response.json()
         booking_ref = create_data.get('bookingRef')
 
         if not booking_ref:
             log_with_timestamp(f"❌ No bookingRef in response: {create_data}")
-            return jsonify({"error": "Failed to get booking reference"}), 500
+            return jsonify({
+                "status": "error",
+                "message": "System error occurred. Please contact us directly on 0800 123 4567.",
+                "quote_id": generate_short_id("WK"),
+                "timestamp": datetime.now().isoformat()
+            }), 200  # ALWAYS 200 for ElevenLabs
 
         log_with_timestamp(f"✅ Got booking ref: {booking_ref}")
         log_with_timestamp("📝 Step 2: Updating booking with search...")
 
-        # Step 2: Update the booking to perform a search
-        # FIXED: Enhanced service mapping with better Man & Van recognition
+        # Step 2: Enhanced service mapping
         service_lower = service.lower().strip()
         log_with_timestamp(f"🔍 Processing service: '{service}' → '{service_lower}'")
         
-        # ENHANCED service mapping with ALL Man & Van variations
+        # ENHANCED service mapping - FIXED Man & Van recognition
         service_mapping = {
             # Skip Hire variations
             "skip hire": "skip",
@@ -1666,7 +1671,7 @@ def get_wasteking_prices_from_api():
             "man in van": "Man & Van", 
             "man & van": "Man & Van",  
             "man with van": "Man & Van",
-            "man o van": "Man & Van",  # NEW: Handle "man O van"
+            "man o van": "Man & Van",  # Handle "man O van"
             "man-and-van": "Man & Van",
             "van": "Man & Van",
             "van service": "Man & Van",
@@ -1697,17 +1702,6 @@ def get_wasteking_prices_from_api():
             "rubbish removal": "removal",
             "rubbish collection": "removal",
             "waste collection": "removal",
-            
-            # Specialist services
-            "hazardous waste": "hazardous",
-            "asbestos": "asbestos",
-            "electrical waste": "weee",
-            "weee": "weee",
-            "chemical disposal": "chemical",
-            
-            # General fallbacks
-            "waste": "removal",
-            "rubbish": "removal"
         }
         
         # Convert service name with intelligent fallbacks
@@ -1732,7 +1726,7 @@ def get_wasteking_prices_from_api():
         update_data = update_response.json()
         log_with_timestamp(f"📄 Update response body: {update_data}")
 
-        # Generate SHORT quote ID instead of UUID
+        # Generate SHORT quote ID
         quote_id = generate_short_id("WK")  # WK123456 format
         customer_phone = data.get('customer_phone', 'Unknown')
         agent_name = data.get('agent_name', 'Thomas')
@@ -1741,7 +1735,7 @@ def get_wasteking_prices_from_api():
 
         log_with_timestamp(f"✅ Generated SHORT quote ID: {quote_id}")
 
-        # Store the quote in database (even if no results found)
+        # Store the quote in database
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1762,73 +1756,73 @@ def get_wasteking_prices_from_api():
             finally:
                 conn.close()
 
-        # Handle different response scenarios
+        # FIXED: Always return status "success" with clear messages for ElevenLabs
         if update_response.status_code == 200:
-            # Success case
-            return jsonify({
-                "status": "success",
-                "quote_id": quote_id,  # SHORT ID: WK123456
-                "bookingRef": booking_ref,
-                "search_results": update_data,
-                "postcode": postcode,
-                "service": wasteking_service,
-                "timestamp": datetime.now().isoformat(),
-                "message": f"Price quote {quote_id} generated successfully. Agent can ask customer about payment."
-            }), 200
-            
-        elif update_response.status_code == 404 or "No results found" in str(update_data):
-            # No results found - provide helpful alternatives
+            # Success case - has pricing
             return jsonify({
                 "status": "success",
                 "quote_id": quote_id,
+                "message": f"I can offer you {wasteking_service} service for {postcode}. Your quote reference is {quote_id}. Would you like me to proceed with booking?",
+                "has_pricing": True,
+                "pricing_available": True,
                 "bookingRef": booking_ref,
                 "search_results": update_data,
                 "postcode": postcode,
                 "service": wasteking_service,
-                "timestamp": datetime.now().isoformat(),
-                "message": f"Sorry, we don't currently service {wasteking_service} in {postcode}. Try a nearby postcode or contact us directly.",
-                "suggestions": [
-                    "Check if you typed the postcode correctly",
-                    "Try a nearby postcode in the same area",
-                    f"We may offer other services in {postcode} - try 'skip', 'Man & Van', or 'clearance'",
-                    "Contact us directly for special arrangements"
-                ],
-                "no_results": True
+                "timestamp": datetime.now().isoformat()
             }), 200
             
         else:
-            # Other error
-            log_with_timestamp(f"❌ Update failed: {update_data}")
+            # No results - but don't make the call fail
             return jsonify({
-                "status": "error",
+                "status": "success",
                 "quote_id": quote_id,
+                "message": f"I'm sorry, we don't currently offer {wasteking_service} service in {postcode}. However, let me check what other services we have available in your area. Can you try a nearby postcode or would you like me to transfer you to our specialist team?",
+                "has_pricing": False,
+                "pricing_available": False,
+                "suggestions": [
+                    f"We may offer other services in {postcode}",
+                    "Try a nearby postcode in the same area", 
+                    "Contact our specialist team for arrangements"
+                ],
                 "bookingRef": booking_ref,
-                "error": f"Search failed: {update_response.status_code}",
-                "details": update_data,
                 "postcode": postcode,
                 "service": wasteking_service,
-                "timestamp": datetime.now().isoformat(),
-                "message": "Unable to get pricing at this time. Please contact us directly."
-            }), 200  # Return 200 so ElevenLabs doesn't see it as error
+                "timestamp": datetime.now().isoformat()
+            }), 200  # ALWAYS 200 - never fail the call
 
     except requests.exceptions.Timeout:
         log_error("WasteKing API timeout")
         return jsonify({
-            "error": "API timeout - please try again",
-            "message": "Service temporarily unavailable. Please try again in a moment."
-        }), 504
+            "status": "success",
+            "quote_id": generate_short_id("WK"),
+            "message": "Our pricing system is temporarily busy. Let me transfer you to our team who can give you a quote directly.",
+            "has_pricing": False,
+            "should_transfer": True,
+            "timestamp": datetime.now().isoformat()
+        }), 200  # ALWAYS 200
+        
     except requests.exceptions.RequestException as e:
         log_error("WasteKing API request failed", e)
         return jsonify({
-            "error": f"API request failed: {str(e)}",
-            "message": "Unable to connect to pricing service. Please contact us directly."
-        }), 500
+            "status": "success", 
+            "quote_id": generate_short_id("WK"),
+            "message": "Let me transfer you to our team who can help you with pricing and booking.",
+            "has_pricing": False,
+            "should_transfer": True,
+            "timestamp": datetime.now().isoformat()
+        }), 200  # ALWAYS 200
+        
     except Exception as e:
         log_error("Unexpected error in WasteKing API", e)
         return jsonify({
-            "error": f"Unexpected error: {str(e)}",
-            "message": "System error occurred. Please contact us directly."
-        }), 500
+            "status": "success",
+            "quote_id": generate_short_id("WK"), 
+            "message": "Let me put you through to our team who can assist you directly.",
+            "has_pricing": False,
+            "should_transfer": True,
+            "timestamp": datetime.now().isoformat()
+        }), 200  # ALWAYS 200
 
 # SMS PAYMENT ENDPOINT (NO CALL TRANSFER)
 @app.route('/api/send-payment-sms', methods=['POST'])
