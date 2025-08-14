@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Call Analysis Dashboard</title>
+    <title>Waste King Call Analysis Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
     <style>
@@ -11,7 +11,7 @@
         body {
             font-family: Arial, sans-serif;
             margin: 0;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #2c5530 0%, #1a3d1f 100%);
             color: #333;
             min-height: 100vh;
         }
@@ -25,11 +25,17 @@
         .header {
             text-align: center;
             margin-bottom: 40px;
-            color: #2c3e50;
-            background: linear-gradient(90deg, #667eea, #764ba2);
+            color: #2c5530;
+            background: linear-gradient(90deg, #2c5530, #1a3d1f);
             background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+        }
+
+        .waste-king-logo {
+            color: #2c5530;
+            font-weight: bold;
+            font-size: 2.5rem;
         }
 
         /* Card Styles */
@@ -52,8 +58,8 @@
         .card-title {
             font-size: 1.5rem;
             margin-bottom: 15px;
-            color: #495057;
-            border-bottom: 2px solid #6c757d;
+            color: #2c5530;
+            border-bottom: 2px solid #2c5530;
             padding-bottom: 10px;
             font-weight: 600;
         }
@@ -65,11 +71,11 @@
             padding: 8px;
             background-color: #ffffff;
             border-radius: 6px;
-            border-left: 4px solid #667eea;
+            border-left: 4px solid #2c5530;
         }
 
         .stats-item strong {
-            color: #495057;
+            color: #1a3d1f;
         }
 
         /* Gauges Container Styles */
@@ -110,7 +116,7 @@
             width: 100%;
             text-align: center;
             font-weight: bold;
-            color: #495057;
+            color: #2c5530;
             font-size: 0.85rem;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -125,7 +131,7 @@
             font-size: 0.85rem;
         }
 
-        /* Performance Section Styles */
+        /* Performance Section Styles - Updated for Waste King */
         .performance-section {
             padding: 10px 0;
         }
@@ -135,7 +141,7 @@
             padding: 20px;
             background: linear-gradient(145deg, #f8f9fa, #ffffff);
             border-radius: 12px;
-            border-left: 4px solid #667eea;
+            border-left: 4px solid #2c5530;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
             transition: all 0.3s ease;
         }
@@ -155,7 +161,7 @@
 
         .performance-title {
             font-weight: 600;
-            color: #495057;
+            color: #2c5530;
             font-size: 1.1rem;
             flex-grow: 1;
         }
@@ -163,7 +169,7 @@
         .category-score {
             font-size: 1.2rem;
             font-weight: bold;
-            color: #667eea;
+            color: #2c5530;
         }
 
         .performance-max {
@@ -201,9 +207,9 @@
 
         .metric-score {
             font-weight: 600;
-            color: #667eea;
+            color: #2c5530;
             font-size: 0.95rem;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #2c5530, #1a3d1f);
             background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -222,7 +228,7 @@
         }
 
         .calls-table th {
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #2c5530, #1a3d1f);
             color: white;
             border: none;
             padding: 12px;
@@ -299,7 +305,7 @@
 
         .agent-name {
             font-weight: 600;
-            color: #495057;
+            color: #2c5530;
         }
 
         .call-summary {
@@ -310,7 +316,7 @@
 
         /* Summary Button and Popup */
         .summary-btn {
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #2c5530, #1a3d1f);
             border: none;
             color: white;
             padding: 6px 12px;
@@ -324,7 +330,7 @@
         }
 
         .summary-btn:hover {
-            background: linear-gradient(45deg, #5a6fd8, #6a42a0);
+            background: linear-gradient(45deg, #1a3d1f, #0d2412);
             transform: translateY(-1px);
             box-shadow: 0 4px 8px rgba(0,0,0,0.15);
         }
@@ -358,7 +364,7 @@
             justify-content: space-between;
             align-items: center;
             padding: 20px;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #2c5530, #1a3d1f);
             color: white;
         }
 
@@ -391,12 +397,12 @@
             padding: 15px;
             background-color: #f8f9fa;
             border-radius: 8px;
-            border-left: 4px solid #667eea;
+            border-left: 4px solid #2c5530;
         }
 
         .summary-section h6 {
             margin: 0 0 10px 0;
-            color: #495057;
+            color: #2c5530;
             font-weight: 600;
             font-size: 1.1rem;
         }
@@ -417,7 +423,7 @@
 
         .transcript-section h6 {
             margin: 0 0 10px 0;
-            color: #495057;
+            color: #2c5530;
             font-weight: 600;
             font-size: 1.1rem;
         }
@@ -583,8 +589,9 @@
 <body>
     <div class="main-container">
         <div class="header">
-            <h1>📞 Call Analysis Dashboard</h1>
-            <p>Real-time insights from Xelion calls with AI-powered transcription and analysis</p>
+            <div class="waste-king-logo">♻️ WASTE KING</div>
+            <h1>Call Analysis Dashboard</h1>
+            <p>Real-time insights from Xelion calls with AI-powered transcription and Waste King specific evaluation criteria</p>
         </div>
 
         <!-- Status Messages -->
@@ -593,8 +600,8 @@
         <!-- Auto-Start Status -->
         <div class="auto-status">
             <span class="live-indicator"></span>
-            <strong>🚀 SYSTEM AUTO-STARTED!</strong><br>
-            Monitoring live calls automatically - Processing NEW calls only (not historic data)
+            <strong>🚀 WASTE KING SYSTEM AUTO-STARTED!</strong><br>
+            Monitoring live calls automatically with Waste King specific evaluation criteria
         </div>
 
         <hr>
@@ -610,13 +617,62 @@
             </div>
             <div class="col-md-8">
                 <div class="card">
-                    <h5 class="card-title">📈 Call Category Performance Overview</h5>
-                    <p class="text-muted mb-3" style="font-size: 0.9rem;">Overall scores by call type - hover for details</p>
+                    <h5 class="card-title">📈 Waste King Service Performance Overview</h5>
+                    <p class="text-muted mb-3" style="font-size: 0.9rem;">Overall scores by service type - based on Waste King training criteria</p>
                     
                     <div class="gauges-container">
-                        <!-- Top Row - 3 Main Categories -->
+                        <!-- Top Row - Main Service Categories -->
                         <div class="row text-center mb-4">
                             <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="skipHireGauge"></canvas>
+                                        <div class="gauge-label">Skip Hire</div>
+                                    </div>
+                                    <small id="skipHireCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="manAndVanGauge"></canvas>
+                                        <div class="gauge-label">Man & Van</div>
+                                    </div>
+                                    <small id="manAndVanCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-4 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="grabHireGauge"></canvas>
+                                        <div class="gauge-label">Grab Hire</div>
+                                    </div>
+                                    <small id="grabHireCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Bottom Row - Other Categories -->
+                        <div class="row text-center justify-content-center">
+                            <div class="col-lg-3 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="collectionsGauge"></canvas>
+                                        <div class="gauge-label">Collections</div>
+                                    </div>
+                                    <small id="collectionsCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-3 col-md-6 mb-3">
+                                <div class="gauge-wrapper">
+                                    <div class="gauge-container">
+                                        <canvas id="clearanceGauge"></canvas>
+                                        <div class="gauge-label">Clearance</div>
+                                    </div>
+                                    <small id="clearanceCount" class="gauge-count">(0 calls)</small>
+                                </div>
+                            </div>
+                            <div class="col-lg-3 col-md-6 mb-3">
                                 <div class="gauge-wrapper">
                                     <div class="gauge-container">
                                         <canvas id="generalEnquiryGauge"></canvas>
@@ -625,44 +681,13 @@
                                     <small id="generalEnquiryCount" class="gauge-count">(0 calls)</small>
                                 </div>
                             </div>
-                            <div class="col-lg-4 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="manInVanGauge"></canvas>
-                                        <div class="gauge-label">Man in Van</div>
-                                    </div>
-                                    <small id="manInVanCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-4 col-md-6 mb-3">
+                            <div class="col-lg-3 col-md-6 mb-3">
                                 <div class="gauge-wrapper">
                                     <div class="gauge-container">
                                         <canvas id="complaintGauge"></canvas>
                                         <div class="gauge-label">Complaint</div>
                                     </div>
                                     <small id="complaintCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Bottom Row - 2 Special Categories -->
-                        <div class="row text-center justify-content-center">
-                            <div class="col-lg-3 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="skipGauge"></canvas>
-                                        <div class="gauge-label">SKIP</div>
-                                    </div>
-                                    <small id="skipCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-3 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="missedNoAudioGauge"></canvas>
-                                        <div class="gauge-label">Missed/No Audio</div>
-                                    </div>
-                                    <small id="missedNoAudioCount" class="gauge-count">(0 calls)</small>
                                 </div>
                             </div>
                         </div>
@@ -674,56 +699,56 @@
         <div class="row">
             <div class="col-md-6">
                 <div class="card">
-                    <h5 class="card-title">🎯 Customer Service Performance</h5>
+                    <h5 class="card-title">📞 Call Handling & Customer Assessment</h5>
                     <div class="performance-section">
                         <div class="performance-category">
                             <div class="performance-header">
-                                <span class="performance-title">Customer Engagement</span>
-                                <span class="category-score" id="avgEngagement">0.00</span>
+                                <span class="performance-title">Call Handling & Telephone Manner</span>
+                                <span class="category-score" id="avgCallHandling">0.00</span>
                                 <span class="performance-max">/ 10</span>
                             </div>
                             <div class="performance-metrics">
                                 <div class="metric-item">
-                                    <span class="metric-label">Active Listening</span>
-                                    <span class="metric-score" id="subEngagement1">0.00</span>
+                                    <span class="metric-label">Professional Telephone Manner</span>
+                                    <span class="metric-score" id="subProfessionalManner">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Probing Questions</span>
-                                    <span class="metric-score" id="subEngagement2">0.00</span>
+                                    <span class="metric-label">Listening to Customer Requirements</span>
+                                    <span class="metric-score" id="subListening">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Empathy & Understanding</span>
-                                    <span class="metric-score" id="subEngagement3">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Clarity & Conciseness</span>
-                                    <span class="metric-score" id="subEngagement4">0.00</span>
+                                    <span class="metric-label">Presenting Appropriate Solutions</span>
+                                    <span class="metric-score" id="subSolutions">0.00</span>
                                 </div>
                             </div>
                         </div>
                         
                         <div class="performance-category">
                             <div class="performance-header">
-                                <span class="performance-title">Politeness</span>
-                                <span class="category-score" id="avgPoliteness">0.00</span>
+                                <span class="performance-title">Customer Needs Assessment</span>
+                                <span class="category-score" id="avgNeedsAssessment">0.00</span>
                                 <span class="performance-max">/ 10</span>
                             </div>
                             <div class="performance-metrics">
                                 <div class="metric-item">
-                                    <span class="metric-label">Greeting & Closing</span>
-                                    <span class="metric-score" id="subPoliteness1">0.00</span>
+                                    <span class="metric-label">Postcode Gathering</span>
+                                    <span class="metric-score" id="subPostcode">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Tone & Demeanor</span>
-                                    <span class="metric-score" id="subPoliteness2">0.00</span>
+                                    <span class="metric-label">Waste Type Identification</span>
+                                    <span class="metric-score" id="subWasteType">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Respectful Language</span>
-                                    <span class="metric-score" id="subPoliteness3">0.00</span>
+                                    <span class="metric-label">Prohibited Items Check</span>
+                                    <span class="metric-score" id="subProhibitedItems">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Handling Interruptions</span>
-                                    <span class="metric-score" id="subPoliteness4">0.00</span>
+                                    <span class="metric-label">Access Assessment</span>
+                                    <span class="metric-score" id="subAccessAssessment">0.00</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="metric-label">Permit Requirements</span>
+                                    <span class="metric-score" id="subPermitRequirements">0.00</span>
                                 </div>
                             </div>
                         </div>
@@ -732,56 +757,58 @@
             </div>
             <div class="col-md-6">
                 <div class="card">
-                    <h5 class="card-title">💼 Professional Excellence</h5>
+                    <h5 class="card-title">💼 Product Knowledge & Sales Excellence</h5>
                     <div class="performance-section">
                         <div class="performance-category">
                             <div class="performance-header">
-                                <span class="performance-title">Professional Knowledge</span>
-                                <span class="category-score" id="avgProfessionalism">0.00</span>
+                                <span class="performance-title">Product Knowledge & Information</span>
+                                <span class="category-score" id="avgProductKnowledge">0.00</span>
                                 <span class="performance-max">/ 10</span>
                             </div>
                             <div class="performance-metrics">
                                 <div class="metric-item">
-                                    <span class="metric-label">Product/Service Information</span>
-                                    <span class="metric-score" id="subProfessionalism1">0.00</span>
+                                    <span class="metric-label">Offering Options</span>
+                                    <span class="metric-score" id="subOfferingOptions">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Policy Adherence</span>
-                                    <span class="metric-score" id="subProfessionalism2">0.00</span>
+                                    <span class="metric-label">Following Procedures</span>
+                                    <span class="metric-score" id="subFollowingProcedures">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Problem Diagnosis</span>
-                                    <span class="metric-score" id="subProfessionalism3">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Solution Offering</span>
-                                    <span class="metric-score" id="subProfessionalism4">0.00</span>
+                                    <span class="metric-label">Communication Guidelines</span>
+                                    <span class="metric-score" id="subCommunicationGuidelines">0.00</span>
                                 </div>
                             </div>
                         </div>
                         
                         <div class="performance-category">
                             <div class="performance-header">
-                                <span class="performance-title">Customer Resolution</span>
-                                <span class="category-score" id="avgResolution">0.00</span>
+                                <span class="performance-title">Objection Handling (ERICA Method)</span>
+                                <span class="category-score" id="avgObjectionHandling">0.00</span>
                                 <span class="performance-max">/ 10</span>
                             </div>
                             <div class="performance-metrics">
                                 <div class="metric-item">
-                                    <span class="metric-label">Issue Identification</span>
-                                    <span class="metric-score" id="subResolution1">0.00</span>
+                                    <span class="metric-label">ERICA Objection Method</span>
+                                    <span class="metric-score" id="subEricaMethod">0.00</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="performance-category">
+                            <div class="performance-header">
+                                <span class="performance-title">Sales Closing</span>
+                                <span class="category-score" id="avgSalesClosing">0.00</span>
+                                <span class="performance-max">/ 10</span>
+                            </div>
+                            <div class="performance-metrics">
+                                <div class="metric-item">
+                                    <span class="metric-label">Sales Recommendation</span>
+                                    <span class="metric-score" id="subSalesRecommendation">0.00</span>
                                 </div>
                                 <div class="metric-item">
-                                    <span class="metric-label">Solution Effectiveness</span>
-                                    <span class="metric-score" id="subResolution2">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Time to Resolution</span>
-                                    <span class="metric-score" id="subResolution3">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Follow-up & Next Steps</span>
-                                    <span class="metric-score" id="subResolution4">0.00</span>
+                                    <span class="metric-label">Asking for Sale</span>
+                                    <span class="metric-score" id="subAskingForSale">0.00</span>
                                 </div>
                             </div>
                         </div>
@@ -793,7 +820,7 @@
         <!-- Calls List Section -->
         <div class="calls-section">
             <div class="card">
-                <h5 class="card-title">📋 Individual Call Details</h5>
+                <h5 class="card-title">📋 Individual Call Details - Waste King Evaluation</h5>
                 
                 <!-- Filters -->
                 <div class="filters-section">
@@ -812,9 +839,9 @@
                             </select>
                         </div>
                         <div class="col-md-3">
-                            <label for="categoryFilter" class="form-label">Filter by Category:</label>
+                            <label for="categoryFilter" class="form-label">Filter by Service:</label>
                             <select class="form-select" id="categoryFilter">
-                                <option value="">All Categories</option>
+                                <option value="">All Services</option>
                             </select>
                         </div>
                         <div class="col-md-3">
@@ -852,12 +879,13 @@
                                 <th>Agent</th>
                                 <th>Phone</th>
                                 <th>Duration</th>
-                                <th>Category</th>
-                                <th>Overall Score</th>
-                                <th>Engagement</th>
-                                <th>Politeness</th>
-                                <th>Professional</th>
-                                <th>Resolution</th>
+                                <th>Service Type</th>
+                                <th>WK Score</th>
+                                <th>Call Handling</th>
+                                <th>Needs Assessment</th>
+                                <th>Product Knowledge</th>
+                                <th>Objection Handling</th>
+                                <th>Sales Closing</th>
                                 <th>Summary</th>
                             </tr>
                         </thead>
@@ -902,6 +930,9 @@
             audio_filter: 'with_audio'
         };
 
+        // Gauge chart variables
+        let skipHireGaugeChart, manAndVanGaugeChart, grabHireGaugeChart, collectionsGaugeChart, clearanceGaugeChart, generalEnquiryGaugeChart, complaintGaugeChart;
+
         // FIXED Summary Popup Functions
         function getSummaryCell(call) {
             const summary = call.summary_translation || 'No summary available';
@@ -913,7 +944,6 @@
                 return '<span class="text-muted">No summary</span>';
             }
             
-            // Always show button for any summary (testing to make sure it works)
             const preview = summary.length > 100 ? summary.substring(0, 100) + '...' : summary;
             return `
                 <div>
@@ -934,7 +964,7 @@
             if (summary && summary !== 'No summary available') {
                 popupContent += `
                     <div class="summary-section">
-                        <h6>📝 AI Summary</h6>
+                        <h6>📝 Waste King AI Analysis</h6>
                         <p class="summary-text">${summary}</p>
                     </div>
                 `;
@@ -1004,7 +1034,7 @@
                     labels: ['Score', 'Remaining'],
                     datasets: [{
                         data: [value, 10 - value],
-                        backgroundColor: ['#667eea', '#e9ecef'],
+                        backgroundColor: ['#2c5530', '#e9ecef'],
                         borderWidth: 0
                     }]
                 },
@@ -1054,27 +1084,49 @@
             });
         }
 
-        let skipGaugeChart, manInVanGaugeChart, generalEnquiryGaugeChart, complaintGaugeChart, missedNoAudioGaugeChart;
-
         function updateGauges(data) {
             try {
                 const categories = data.category_call_ratings;
 
-                // Update SKIP gauge
-                const skipCanvas = document.getElementById('skipGauge');
-                const skipScore = categories.SKIP ? categories.SKIP.average_score : 0;
-                const skipCount = categories.SKIP ? categories.SKIP.count : 0;
-                document.getElementById('skipCount').innerText = `(${skipCount} calls)`;
-                if (skipGaugeChart) skipGaugeChart.destroy();
-                skipGaugeChart = createGaugeChart(skipCanvas.getContext('2d'), skipScore, 'SKIP');
+                // Update Skip Hire gauge
+                const skipHireCanvas = document.getElementById('skipHireGauge');
+                const skipHireScore = categories['skip hire'] ? categories['skip hire'].average_score : 0;
+                const skipHireCount = categories['skip hire'] ? categories['skip hire'].count : 0;
+                document.getElementById('skipHireCount').innerText = `(${skipHireCount} calls)`;
+                if (skipHireGaugeChart) skipHireGaugeChart.destroy();
+                skipHireGaugeChart = createGaugeChart(skipHireCanvas.getContext('2d'), skipHireScore, 'Skip Hire');
 
-                // Update Man in Van gauge
-                const manInVanCanvas = document.getElementById('manInVanGauge');
-                const manInVanScore = categories['man in van'] ? categories['man in van'].average_score : 0;
-                const manInVanCount = categories['man in van'] ? categories['man in van'].count : 0;
-                document.getElementById('manInVanCount').innerText = `(${manInVanCount} calls)`;
-                if (manInVanGaugeChart) manInVanGaugeChart.destroy();
-                manInVanGaugeChart = createGaugeChart(manInVanCanvas.getContext('2d'), manInVanScore, 'Man in Van');
+                // Update Man & Van gauge
+                const manAndVanCanvas = document.getElementById('manAndVanGauge');
+                const manAndVanScore = categories['man and van'] ? categories['man and van'].average_score : 0;
+                const manAndVanCount = categories['man and van'] ? categories['man and van'].count : 0;
+                document.getElementById('manAndVanCount').innerText = `(${manAndVanCount} calls)`;
+                if (manAndVanGaugeChart) manAndVanGaugeChart.destroy();
+                manAndVanGaugeChart = createGaugeChart(manAndVanCanvas.getContext('2d'), manAndVanScore, 'Man & Van');
+
+                // Update Grab Hire gauge
+                const grabHireCanvas = document.getElementById('grabHireGauge');
+                const grabHireScore = categories['grab hire'] ? categories['grab hire'].average_score : 0;
+                const grabHireCount = categories['grab hire'] ? categories['grab hire'].count : 0;
+                document.getElementById('grabHireCount').innerText = `(${grabHireCount} calls)`;
+                if (grabHireGaugeChart) grabHireGaugeChart.destroy();
+                grabHireGaugeChart = createGaugeChart(grabHireCanvas.getContext('2d'), grabHireScore, 'Grab Hire');
+
+                // Update Collections gauge
+                const collectionsCanvas = document.getElementById('collectionsGauge');
+                const collectionsScore = categories['collections'] ? categories['collections'].average_score : 0;
+                const collectionsCount = categories['collections'] ? categories['collections'].count : 0;
+                document.getElementById('collectionsCount').innerText = `(${collectionsCount} calls)`;
+                if (collectionsGaugeChart) collectionsGaugeChart.destroy();
+                collectionsGaugeChart = createGaugeChart(collectionsCanvas.getContext('2d'), collectionsScore, 'Collections');
+
+                // Update Clearance gauge
+                const clearanceCanvas = document.getElementById('clearanceGauge');
+                const clearanceScore = categories['clearance'] ? categories['clearance'].average_score : 0;
+                const clearanceCount = categories['clearance'] ? categories['clearance'].count : 0;
+                document.getElementById('clearanceCount').innerText = `(${clearanceCount} calls)`;
+                if (clearanceGaugeChart) clearanceGaugeChart.destroy();
+                clearanceGaugeChart = createGaugeChart(clearanceCanvas.getContext('2d'), clearanceScore, 'Clearance');
 
                 // Update General Enquiry gauge
                 const generalEnquiryCanvas = document.getElementById('generalEnquiryGauge');
@@ -1086,19 +1138,11 @@
 
                 // Update Complaint gauge
                 const complaintCanvas = document.getElementById('complaintGauge');
-                const complaintScore = categories.complaint ? categories.complaint.average_score : 0;
-                const complaintCount = categories.complaint ? categories.complaint.count : 0;
+                const complaintScore = categories['complaint'] ? categories['complaint'].average_score : 0;
+                const complaintCount = categories['complaint'] ? categories['complaint'].count : 0;
                 document.getElementById('complaintCount').innerText = `(${complaintCount} calls)`;
                 if (complaintGaugeChart) complaintGaugeChart.destroy();
                 complaintGaugeChart = createGaugeChart(complaintCanvas.getContext('2d'), complaintScore, 'Complaint');
-
-                // Update Missed/No Audio gauge
-                const missedNoAudioCanvas = document.getElementById('missedNoAudioGauge');
-                const missedNoAudioScore = categories['Missed/No Audio'] ? categories['Missed/No Audio'].average_score : 0;
-                const missedNoAudioCount = categories['Missed/No Audio'] ? categories['Missed/No Audio'].count : 0;
-                document.getElementById('missedNoAudioCount').innerText = `(${missedNoAudioCount} calls)`;
-                if (missedNoAudioGaugeChart) missedNoAudioGaugeChart.destroy();
-                missedNoAudioGaugeChart = createGaugeChart(missedNoAudioCanvas.getContext('2d'), missedNoAudioScore, 'Missed/No Audio');
             } catch (error) {
                 console.error('Error updating gauges:', error);
             }
@@ -1126,29 +1170,32 @@
                 document.getElementById('totalCost').innerText = `£${data.total_cost_gbp.toFixed(2)}`;
                 document.getElementById('totalDuration').innerText = `${data.total_duration_minutes.toFixed(2)} mins`;
 
-                document.getElementById('avgEngagement').innerText = data.average_ratings.customer_engagement.toFixed(2);
-                document.getElementById('subEngagement1').innerText = data.sub_category_ratings.customer_engagement.active_listening.toFixed(2);
-                document.getElementById('subEngagement2').innerText = data.sub_category_ratings.customer_engagement.probing_questions.toFixed(2);
-                document.getElementById('subEngagement3').innerText = data.sub_category_ratings.customer_engagement.empathy_understanding.toFixed(2);
-                document.getElementById('subEngagement4').innerText = data.sub_category_ratings.customer_engagement.clarity_conciseness.toFixed(2);
+                // Update Waste King specific scores
+                if (data.waste_king_main_ratings) {
+                    document.getElementById('avgCallHandling').innerText = data.waste_king_main_ratings.call_handling_telephone_manner.toFixed(2);
+                    document.getElementById('avgNeedsAssessment').innerText = data.waste_king_main_ratings.customer_needs_assessment.toFixed(2);
+                    document.getElementById('avgProductKnowledge').innerText = data.waste_king_main_ratings.product_knowledge_information.toFixed(2);
+                    document.getElementById('avgObjectionHandling').innerText = data.waste_king_main_ratings.objection_handling_erica.toFixed(2);
+                    document.getElementById('avgSalesClosing').innerText = data.waste_king_main_ratings.sales_closing.toFixed(2);
+                }
 
-                document.getElementById('avgPoliteness').innerText = data.average_ratings.politeness.toFixed(2);
-                document.getElementById('subPoliteness1').innerText = data.sub_category_ratings.politeness.greeting_closing.toFixed(2);
-                document.getElementById('subPoliteness2').innerText = data.sub_category_ratings.politeness.tone_demeanor.toFixed(2);
-                document.getElementById('subPoliteness3').innerText = data.sub_category_ratings.politeness.respectful_language.toFixed(2);
-                document.getElementById('subPoliteness4').innerText = data.sub_category_ratings.politeness.handling_interruptions.toFixed(2);
-
-                document.getElementById('avgProfessionalism').innerText = data.average_ratings.professional_knowledge.toFixed(2);
-                document.getElementById('subProfessionalism1').innerText = data.sub_category_ratings.professional_knowledge.product_service_info.toFixed(2);
-                document.getElementById('subProfessionalism2').innerText = data.sub_category_ratings.professional_knowledge.policy_adherence.toFixed(2);
-                document.getElementById('subProfessionalism3').innerText = data.sub_category_ratings.professional_knowledge.problem_diagnosis.toFixed(2);
-                document.getElementById('subProfessionalism4').innerText = data.sub_category_ratings.professional_knowledge.solution_offering.toFixed(2);
-
-                document.getElementById('avgResolution').innerText = data.average_ratings.customer_resolution.toFixed(2);
-                document.getElementById('subResolution1').innerText = data.sub_category_ratings.customer_resolution.issue_identification.toFixed(2);
-                document.getElementById('subResolution2').innerText = data.sub_category_ratings.customer_resolution.solution_effectiveness.toFixed(2);
-                document.getElementById('subResolution3').innerText = data.sub_category_ratings.customer_resolution.time_to_resolution.toFixed(2);
-                document.getElementById('subResolution4').innerText = data.sub_category_ratings.customer_resolution.follow_up_next_steps.toFixed(2);
+                // Update Waste King sub-scores
+                if (data.waste_king_sub_ratings) {
+                    document.getElementById('subProfessionalManner').innerText = data.waste_king_sub_ratings.professional_telephone_manner.toFixed(2);
+                    document.getElementById('subListening').innerText = data.waste_king_sub_ratings.listening_customer_requirements.toFixed(2);
+                    document.getElementById('subSolutions').innerText = data.waste_king_sub_ratings.presenting_appropriate_solutions.toFixed(2);
+                    document.getElementById('subPostcode').innerText = data.waste_king_sub_ratings.postcode_gathering.toFixed(2);
+                    document.getElementById('subWasteType').innerText = data.waste_king_sub_ratings.waste_type_identification.toFixed(2);
+                    document.getElementById('subProhibitedItems').innerText = data.waste_king_sub_ratings.prohibited_items_check.toFixed(2);
+                    document.getElementById('subAccessAssessment').innerText = data.waste_king_sub_ratings.access_assessment.toFixed(2);
+                    document.getElementById('subPermitRequirements').innerText = data.waste_king_sub_ratings.permit_requirements.toFixed(2);
+                    document.getElementById('subOfferingOptions').innerText = data.waste_king_sub_ratings.offering_options.toFixed(2);
+                    document.getElementById('subFollowingProcedures').innerText = data.waste_king_sub_ratings.following_procedures.toFixed(2);
+                    document.getElementById('subCommunicationGuidelines').innerText = data.waste_king_sub_ratings.communication_guidelines.toFixed(2);
+                    document.getElementById('subEricaMethod').innerText = data.waste_king_sub_ratings.erica_objection_method.toFixed(2);
+                    document.getElementById('subSalesRecommendation').innerText = data.waste_king_sub_ratings.sales_recommendation.toFixed(2);
+                    document.getElementById('subAskingForSale').innerText = data.waste_king_sub_ratings.asking_for_sale.toFixed(2);
+                }
 
                 updateGauges(data);
 
@@ -1210,7 +1257,7 @@
                 // Update categories dropdown
                 const categorySelect = document.getElementById('categoryFilter');
                 const currentCategory = categorySelect.value;
-                categorySelect.innerHTML = '<option value="">All Categories</option>';
+                categorySelect.innerHTML = '<option value="">All Services</option>';
                 filters.categories.forEach(category => {
                     const option = document.createElement('option');
                     option.value = category;
@@ -1229,7 +1276,7 @@
                 tbody.innerHTML = '';
 
                 if (calls.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="11" class="text-center">No calls found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="12" class="text-center">No calls found</td></tr>';
                     return;
                 }
 
@@ -1255,17 +1302,18 @@
                         <td>${call.phone_number}</td>
                         <td>${call.formatted_duration}</td>
                         <td><span class="badge bg-secondary">${call.category || 'Unknown'}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_overall_score || 0)}">${(call.openai_overall_score || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_engagement || 0)}">${(call.openai_engagement || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_politeness || 0)}">${(call.openai_politeness || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_professionalism || 0)}">${(call.openai_professionalism || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.openai_resolution || 0)}">${(call.openai_resolution || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.overall_waste_king_score || 0)}">${(call.overall_waste_king_score || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.call_handling_telephone_manner || 0)}">${(call.call_handling_telephone_manner || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.customer_needs_assessment || 0)}">${(call.customer_needs_assessment || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.product_knowledge_information || 0)}">${(call.product_knowledge_information || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.objection_handling_erica || 0)}">${(call.objection_handling_erica || 0).toFixed(1)}</span></td>
+                        <td><span class="score-badge ${getScoreBadgeClass(call.sales_closing || 0)}">${(call.sales_closing || 0).toFixed(1)}</span></td>
                         <td>${getSummaryCell(call)}</td>
                     `;
                     tbody.appendChild(row);
                 });
 
-                // FIXED: Add click event listeners to summary buttons
+                // Add click event listeners to summary buttons
                 document.querySelectorAll('.summary-btn').forEach(button => {
                     button.addEventListener('click', function() {
                         const oid = this.getAttribute('data-oid');
@@ -1325,7 +1373,7 @@
                 
                 const status = await response.json();
                 
-                let statusMessage = `System Status:\n`;
+                let statusMessage = `Waste King System Status:\n`;
                 statusMessage += `- Background Process: ${status.background_running ? '✅ Running' : '❌ Stopped'}\n`;
                 statusMessage += `- OpenAI: ${status.openai_connection_test ? '✅ Connected' : '❌ Failed'}\n`;
                 statusMessage += `- Processed Calls: ${status.processing_stats.total_processed}\n`;
@@ -1397,7 +1445,7 @@
 
         // --- Auto-start functionality ---
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Dashboard loading - System auto-started via Flask route');
+            console.log('🚀 Waste King Dashboard loading - System auto-started via Flask route');
             
             // Setup popup event handlers
             document.querySelector('.summary-popup-close').onclick = closeSummaryPopup;
@@ -1427,8 +1475,8 @@
                     }
                 }, 15000);
                 
-                console.log('✅ Dashboard initialized - Auto-refreshing every 15 seconds');
-                showAlert('Dashboard loaded successfully! Monitoring NEW calls only.', 'success');
+                console.log('✅ Waste King Dashboard initialized - Auto-refreshing every 15 seconds');
+                showAlert('Waste King Dashboard loaded successfully! Monitoring NEW calls with proper evaluation criteria.', 'success');
                 
             } catch (error) {
                 console.error('Error initializing dashboard:', error);
