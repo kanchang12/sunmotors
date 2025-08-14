@@ -1399,7 +1399,7 @@ init_db()
 
 
 @app.route('/demo')
-def index():
+def demo():
     return render_template('demo.html')
     
 # --- Flask Routes ---
