@@ -9,13 +9,13 @@ import traceback
 import pickle
 import smtplib
 import random
-import re
 from datetime import datetime, timedelta
 from flask import Flask, render_template, jsonify, request, send_file
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import re
 from bs4 import BeautifulSoup
 
 # Twilio imports
@@ -103,24 +103,9 @@ def generate_short_id(prefix="WK"):
     return f"{prefix}{random.randint(100000, 999999)}"
 
 def log_with_timestamp(message, level="INFO"):
-    """Clean logging - no sensitive data"""
-    # Filter out phone numbers and sensitive data
-    clean_message = message
-    phone_patterns = [
-        r'\+44\d{9,10}', r'0\d{9,10}', r'\d{11}',
-        r'customer_phone["\']?\s*:\s*["\']?[\+\d\s\-\(\)]+["\']?'
-    ]
-    
-    for pattern in phone_patterns:
-        clean_message = re.sub(pattern, '[PHONE_HIDDEN]', clean_message)
-    
-    # Only show important messages
-    important_keywords = ["🎯", "✅", "❌", "ERROR", "FINAL:", "AUTO-STARTING", "Quote", "Payment", "SMS"]
-    if level == "INFO" and not any(keyword in clean_message for keyword in important_keywords):
-        return
-    
+    """Enhanced logging with timestamps and levels"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"[{timestamp}] [{level}] {clean_message}")
+    print(f"[{timestamp}] [{level}] {message}")
 
 def log_error(message, error=None):
     """Log errors with full traceback"""
@@ -595,6 +580,199 @@ def get_wasteking_prices():
             "timestamp": datetime.now().isoformat()
         }
 
+# --- EXACT WASTEKING WORKFLOW FROM IMAGES ---
+@app.route('/api/wasteking-quote', methods=['POST'])
+def wasteking_exact_workflow():
+    """EXACT implementation of the WasteKing workflow from your screenshots"""
+    log_with_timestamp("="*60)
+    log_with_timestamp("🎯 WASTEKING EXACT WORKFLOW FROM IMAGES")
+    log_with_timestamp("="*60)
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+        
+        # STEP 1: Must have postcode, service, and type (from Image 1)
+        postcode = data.get('postcode')
+        service = data.get('service') 
+        skip_type = data.get('type')
+        
+        if not all([postcode, service, skip_type]):
+            return jsonify({
+                "success": False,
+                "message": "Must have postcode, service, and type to proceed",
+                "missing": [k for k in ['postcode', 'service', 'type'] if not data.get(k)]
+            }), 400
+        
+        # Headers exactly as shown in images
+        headers = {
+            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+            "Content-Type": "application/json"
+        }
+        
+        # Create booking reference first
+        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
+        create_response = requests.post(create_url, headers=headers, json={
+            "type": "chatbot", 
+            "source": "wasteking.co.uk"
+        }, timeout=15, verify=False)
+        
+        if create_response.status_code != 200:
+            return jsonify({"success": False, "message": "Failed to create booking"}), 500
+        
+        booking_ref = create_response.json().get('bookingRef')
+        if not booking_ref:
+            return jsonify({"success": False, "message": "No booking reference"}), 500
+        
+        log_with_timestamp(f"📋 Created booking reference: {booking_ref}")
+        
+        # STEP 1: Search with postcode, service, type (EXACTLY from Image 1)
+        update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
+        
+        step1_payload = {
+            "bookingRef": booking_ref,
+            "search": {
+                "postCode": postcode,
+                "service": service,
+                "type": skip_type
+            }
+        }
+        
+        log_with_timestamp("🔍 Step 1: Posting search details...")
+        step1_response = requests.post(update_url, headers=headers, json=step1_payload, timeout=20, verify=False)
+        
+        if step1_response.status_code != 200:
+            return jsonify({
+                "success": False,
+                "message": f"Service not available in {postcode}",
+                "booking_ref": booking_ref
+            })
+        
+        log_with_timestamp("✅ Step 1 complete: Service available")
+        
+        # STEP 2: Add customer details if provided (EXACTLY from Image 2)
+        if data.get('firstName') and data.get('lastName'):
+            log_with_timestamp("👤 Step 2: Adding customer details...")
+            
+            step2_payload = {
+                "bookingRef": booking_ref,
+                "customer": {
+                    "firstName": data.get('firstName'),
+                    "lastName": data.get('lastName'),
+                    "phone": data.get('phone', ''),
+                    "emailAddress": data.get('emailAddress', ''),
+                    "address1": data.get('address1', ''),
+                    "address2": data.get('address2', ''),
+                    "addressCity": data.get('addressCity', ''),
+                    "addressCounty": data.get('addressCounty', ''),
+                    "addressPostcode": data.get('addressPostcode', postcode)
+                }
+            }
+            
+            step2_response = requests.post(update_url, headers=headers, json=step2_payload, timeout=15, verify=False)
+            log_with_timestamp("✅ Step 2 complete: Customer details added")
+        
+        # STEP 3: Add service details if provided (EXACTLY from Image 3)
+        if data.get('date') and data.get('time'):
+            log_with_timestamp("📅 Step 3: Adding service details...")
+            
+            step3_payload = {
+                "bookingRef": booking_ref,
+                "service": {
+                    "date": data.get('date'),
+                    "time": data.get('time'),
+                    "collection": data.get('collection', ''),
+                    "placement": data.get('placement', 'drive'),
+                    "notes": data.get('notes', '')
+                }
+            }
+            
+            # Add supplements exactly as shown in images
+            if data.get('supplement_code'):
+                step3_payload["service"]["supplements"] = [{
+                    "code": data.get('supplement_code'),
+                    "qty": int(data.get('supplement_qty', 1))
+                }]
+            
+            # Add images exactly as shown
+            if data.get('imageUrl'):
+                step3_payload["images"] = [{
+                    "imageUrl": data.get('imageUrl')
+                }]
+            
+            step3_response = requests.post(update_url, headers=headers, json=step3_payload, timeout=15, verify=False)
+            log_with_timestamp("✅ Step 3 complete: Service details added")
+        
+        # FINAL STEP: Get quote with action (EXACTLY from Image 3)
+        log_with_timestamp("💰 Final Step: Getting quote...")
+        
+        quote_payload = {
+            "bookingRef": booking_ref,
+            "action": "quote",
+            "postPaymentUrl": "https://wasteking.co.uk/thank-you/"
+        }
+        
+        quote_response = requests.post(update_url, headers=headers, json=quote_payload, timeout=15, verify=False)
+        
+        if quote_response.status_code == 200:
+            quote_data = quote_response.json()
+            
+            # Extract quote exactly as shown in images
+            quote_info = quote_data.get('quote', {})
+            service_price = quote_info.get('servicePrice', '0.00')
+            supplements_price = quote_info.get('supplementsPrice', '0.00') 
+            total_price = quote_info.get('price', '0.00')
+            payment_link = quote_info.get('paymentLink', '')
+            post_payment_url = quote_info.get('postPaymentUrl', '')
+            
+            log_with_timestamp(f"✅ Quote complete: £{total_price}")
+            
+            # Store in database
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO price_quotes 
+                    (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    booking_ref, booking_ref, postcode, service, json.dumps(quote_data),
+                    datetime.now().isoformat(), data.get('agent_name', 'Thomas'), 'quoted',
+                    data.get('call_sid', 'Unknown'), data.get('elevenlabs_conversation_id', 'Unknown')
+                ))
+                conn.commit()
+                conn.close()
+            
+            # Return exactly what images show
+            return jsonify({
+                "success": True,
+                "booking_ref": booking_ref,
+                "quote": {
+                    "servicePrice": service_price,
+                    "supplementsPrice": supplements_price,
+                    "price": total_price,
+                    "paymentLink": payment_link,
+                    "postPaymentUrl": post_payment_url
+                },
+                "message": f"Quote ready! {skip_type} {service} for £{total_price}. Reference: {booking_ref}"
+            })
+        
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Quote generation failed",
+                "booking_ref": booking_ref
+            })
+    
+    except Exception as e:
+        log_error("WasteKing exact workflow failed", e)
+        return jsonify({
+            "success": False,
+            "message": "System error",
+            "error": str(e)
+        }), 500
+
 # --- Xelion API Functions (keeping as is) ---
 def xelion_login() -> bool:
     """Login using the working pattern"""
@@ -670,9 +848,11 @@ def fetch_all_communications_from_start_time(until_date: datetime, start_time: d
             for base_url in base_urls_to_try:
                 communications_url = f"{base_url.rstrip('/')}/communications"
                 try:
+                    log_with_timestamp(f"Fetching page {page} from {communications_url} (attempt {attempt + 1})")
                     response = xelion_session.get(communications_url, params=params, timeout=30)
                     
                     if response.status_code == 401:
+                        log_with_timestamp("🔑 401 error, re-authenticating...")
                         global session_token
                         session_token = None
                         
@@ -686,6 +866,7 @@ def fetch_all_communications_from_start_time(until_date: datetime, start_time: d
                     communications = data.get('data', [])
                     
                     if not communications:
+                        log_with_timestamp(f"No more communications found on page {page}")
                         return all_communications
                     
                     # CHECK: Stop if we've gone too far back (before start_time)
@@ -709,34 +890,43 @@ def fetch_all_communications_from_start_time(until_date: datetime, start_time: d
                                     page_has_valid_calls = True
                                 # If call is older than start_time, we've gone too far back
                                 else:
+                                    log_with_timestamp(f"⏹️ Reached call older than start time ({call_dt} < {start_time})")
                                     # Add valid calls from this page and stop
                                     all_communications.extend(valid_calls_this_page)
                                     log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
                                     return all_communications
                                     
                             except Exception as e:
-                                continue
+                                log_with_timestamp(f"Error parsing date {call_datetime}: {e}")
                     
                     # If no valid calls on this page, we're done
                     if not page_has_valid_calls:
+                        log_with_timestamp(f"⏹️ No calls from {start_time} onwards on page {page}")
                         log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
                         return all_communications
                     
                     # Add valid calls from this page
                     all_communications.extend(valid_calls_this_page)
+                    log_with_timestamp(f"Page {page}: Added {len(valid_calls_this_page)} valid calls (Total: {len(all_communications)})")
                     
                     # Track status breakdown for valid calls only
+                    status_breakdown = {}
                     for comm in valid_calls_this_page:
                         status = comm.get('object', {}).get('status', 'unknown')
+                        status_breakdown[status] = status_breakdown.get(status, 0) + 1
                         processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
+                    
+                    log_with_timestamp(f"Page {page} valid calls status: {status_breakdown}")
                     
                     # Get next page info
                     if 'meta' in data and 'paging' in data['meta']:
                         before_oid = data['meta']['paging'].get('previousId')
                         if not before_oid:
+                            log_with_timestamp("No more pages available")
                             log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
                             return all_communications
                     else:
+                        log_with_timestamp("No paging info, assuming last page")
                         log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
                         return all_communications
                     
@@ -744,12 +934,14 @@ def fetch_all_communications_from_start_time(until_date: datetime, start_time: d
                     break
                         
                 except Exception as e:
+                    log_error(f"Failed to fetch page {page} from {base_url} (attempt {attempt + 1})", e)
                     continue
             
             if fetched_this_page:
                 break
         
         if not fetched_this_page:
+            log_error(f"Failed to fetch page {page} from all URLs and attempts")
             break
         
         page += 1
@@ -801,85 +993,166 @@ def _extract_agent_info(comm_obj: Dict) -> Dict:
     return agent_info
 
 def download_audio(communication_oid: str) -> Optional[str]:
-    """Download audio - QUIET"""
+    """Download audio with better error handling and retry logic"""
     audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
-    file_path = os.path.join(AUDIO_TEMP_DIR, f"{communication_oid}.mp3")
+    file_name = f"{communication_oid}.mp3"
+    file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
 
+    # Try multiple times with re-auth if needed
     for attempt in range(3):
         try:
+            log_with_timestamp(f"🎵 Downloading audio for OID {communication_oid} (attempt {attempt + 1})")
+            
+            # Ensure we're authenticated
             global session_token
-            if not session_token and not xelion_login():
-                continue
+            if not session_token:
+                log_with_timestamp(f"No session token, re-authenticating...")
+                if not xelion_login():
+                    log_with_timestamp(f"Re-auth failed for audio download")
+                    continue
             
             response = xelion_session.get(audio_url, timeout=60)
             
+            log_with_timestamp(f"Audio response: {response.status_code} for OID {communication_oid}")
+            
             if response.status_code == 200:
-                if len(response.content) > 10:
+                content_length = len(response.content)
+                log_with_timestamp(f"Downloaded {content_length} bytes for OID {communication_oid}")
+                
+                if content_length > 10:  # Valid audio file
                     with open(file_path, 'wb') as f:
                         f.write(response.content)
+                    log_with_timestamp(f"✅ Audio saved successfully for OID {communication_oid}")
                     return file_path
-                return None
+                else:
+                    log_with_timestamp(f"❌ Audio too small ({content_length} bytes) for OID {communication_oid}")
+                    return None
+                    
             elif response.status_code == 404:
+                log_with_timestamp(f"❌ No audio file exists for OID {communication_oid}")
                 return None
+                
             elif response.status_code == 401:
-                session_token = None
+                log_with_timestamp(f"🔑 401 Auth error for OID {communication_oid}, retrying with fresh auth...")
+                session_token = None  # Force re-auth
                 if xelion_login():
-                    continue
+                    continue  # Retry with fresh token
+                else:
+                    log_with_timestamp(f"❌ Re-auth failed for OID {communication_oid}")
+                    return None
+                    
+            else:
+                pass
+                
+        except Exception as e:
+            log_error(f"Audio download attempt {attempt + 1} failed for {communication_oid}", e)
+            if attempt == 2:  # Last attempt
                 return None
-        except:
-            if attempt == 2:
-                return None
-            time.sleep(2)
+            time.sleep(2)  # Wait before retry
+    
+    log_with_timestamp(f"❌ All audio download attempts failed for OID {communication_oid}")
     return None
 
 # --- Deepgram Transcription ---
 def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
-    """Transcribe audio - QUIET"""
+    """Transcribe audio file using Deepgram direct API"""
     if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
+        log_error("Deepgram API key not configured")
         return None
 
     oid = metadata_row['oid']
-    if not os.path.exists(audio_file_path) or os.path.getsize(audio_file_path) < 10:
+    
+    if not os.path.exists(audio_file_path):
+        log_error(f"Audio file not found for transcription: {audio_file_path}")
         return None
     
     try:
+        # Check file size
+        file_size = os.path.getsize(audio_file_path)
+        log_with_timestamp(f"🎵 Transcribing audio file: {file_size} bytes")
+        
+        if file_size < 10:
+            log_error(f"Audio file too small: {file_size} bytes")
+            return None
+        
+        # Use direct API
         url = "https://api.deepgram.com/v1/listen"
         headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
-        params = {"model": "nova-2", "smart_format": "true", "punctuate": "true", "language": "en-GB"}
+        params = {
+            "model": "nova-2", 
+            "smart_format": "true", 
+            "punctuate": "true",
+            "diarize": "true", 
+            "utterances": "true", 
+            "language": "en-GB"
+        }
+        
+        log_with_timestamp(f"🎯 Transcribing OID {oid} using Deepgram API...")
         
         with open(audio_file_path, 'rb') as audio_file:
             response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
         
+        log_with_timestamp(f"Deepgram response: {response.status_code}")
+        
         if response.status_code != 200:
+            log_error(f"Deepgram API error: {response.status_code} - {response.text}")
             return None
         
         result = response.json()
-        if not result.get('results', {}).get('channels', [{}])[0].get('alternatives', []):
+        
+        # Validate response structure
+        if 'results' not in result:
+            log_error(f"Invalid response structure from Deepgram for OID {oid}: missing 'results'")
+            return None
+            
+        if not result['results'].get('channels'):
+            log_error(f"No channels in Deepgram response for OID {oid}")
+            return None
+            
+        if not result['results']['channels'][0].get('alternatives'):
+            log_error(f"No alternatives in Deepgram response for OID {oid}")
             return None
         
         transcript_data = result['results']['channels'][0]['alternatives'][0]
-        transcript_text = transcript_data.get('transcript', '').strip()
+        transcript_text = transcript_data.get('transcript', '')
         
-        if not transcript_text:
+        # Get metadata
+        metadata = result.get('metadata', {})
+        duration_seconds = metadata.get('duration', 0)
+        confidence = transcript_data.get('confidence', 0)
+        language = metadata.get('detected_language', 'en')
+        
+        log_with_timestamp(f"✅ Deepgram transcription successful for OID {oid}")
+
+        if not transcript_text.strip():
+            log_with_timestamp(f"⚠️ Empty transcription for OID {oid}", "WARN")
             return None
         
-        duration_seconds = result.get('metadata', {}).get('duration', 0)
+        # Calculate costs
         duration_minutes = duration_seconds / 60
-        
+        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
+        cost_gbp = cost_usd * USD_TO_GBP_RATE
+        word_count = len(transcript_text.split())
+
+        log_with_timestamp(f"📊 Transcription complete for OID {oid}: {word_count} words, {duration_minutes:.2f} minutes")
+
         return {
-            'oid': oid, 'transcription_text': transcript_text,
+            'oid': oid,
+            'transcription_text': transcript_text,
             'transcribed_duration_minutes': round(duration_minutes, 2),
-            'deepgram_cost_usd': round(duration_minutes * 0.0043, 4),
-            'deepgram_cost_gbp': round(duration_minutes * 0.0043 * 0.79, 4),
-            'word_count': len(transcript_text.split()),
-            'confidence': round(transcript_data.get('confidence', 0), 3),
-            'language': result.get('metadata', {}).get('detected_language', 'en')
+            'deepgram_cost_usd': round(cost_usd, 4),
+            'deepgram_cost_gbp': round(cost_gbp, 4),
+            'word_count': word_count,
+            'confidence': round(confidence, 3),
+            'language': language
         }
-    except:
+            
+    except Exception as e:
+        log_error(f"Deepgram transcription failed for OID {oid}", e)
         return None
 
 def process_single_call(communication_data: Dict) -> Optional[str]:
-    """Process single call - QUIET VERSION"""
+    """Process single call with Waste King criteria"""
     comm_obj = communication_data.get('object', {})
     oid = comm_obj.get('oid')
     
@@ -893,6 +1166,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
         if cursor.fetchone():
             conn.close()
+            log_with_timestamp(f"⏭️ OID {oid} already in database, skipping")
             processing_stats['total_skipped'] += 1
             return None
         conn.close()
@@ -909,26 +1183,33 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
             call_dt = datetime.strptime(call_datetime, '%Y-%m-%d %H:%M:%S')
             
         if (datetime.now() - call_dt) > timedelta(minutes=60):
+            log_with_timestamp(f"⏭️ OID {oid} is older than 60 mins, skipping")
             processing_stats['total_skipped'] += 1
             return None
-    except:
+    except Exception as e:
+        log_error(f"Error parsing datetime for OID {oid}", e)
         processing_stats['total_skipped'] += 1
         return None
+
+    log_with_timestamp(f"🚀 Processing OID: {oid}")
 
     try:
         raw_data = json.dumps(communication_data)
         xelion_metadata = _extract_agent_info(comm_obj)
+        call_datetime = comm_obj.get('date', 'Unknown')
         
         audio_file_path = download_audio(oid)
         if not audio_file_path:
+            log_with_timestamp(f"🔄 OID {oid} has no audio yet, will retry")
             return None
 
         transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
         
         try:
             os.remove(audio_file_path)
-        except:
-            pass
+            log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
+        except Exception as e:
+            log_error(f"Error deleting audio file", e)
 
         if not transcription_result:
             processing_stats['total_errors'] += 1
@@ -936,6 +1217,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
 
         wasteking_analysis = analyze_transcription_with_wasteking_criteria(transcription_result['transcription_text'], oid)
         if not wasteking_analysis:
+            # Fallback scores for Waste King criteria
             wasteking_analysis = {
                 "call_handling_telephone_manner": 0, "customer_needs_assessment": 0, "product_knowledge_information": 0,
                 "objection_handling_erica": 0, "sales_closing": 0, "compliance_procedures": 0,
@@ -944,7 +1226,7 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                 "access_assessment": 0, "permit_requirements": 0, "offering_options": 0,
                 "erica_objection_method": 0, "sales_recommendation": 0, "asking_for_sale": 0,
                 "following_procedures": 0, "communication_guidelines": 0, "overall_waste_king_score": 0,
-                "summary": "Analysis failed"
+                "summary": "Waste King analysis failed"
             }
 
         call_category = categorize_call(transcription_result['transcription_text'])
@@ -991,18 +1273,18 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
                     wasteking_analysis.get('summary', 'No summary'), wasteking_analysis.get('overall_waste_king_score', 0)
                 ))
                 conn.commit()
-                log_with_timestamp(f"✅ Call processed: {oid}")
+                log_with_timestamp(f"✅ Successfully stored OID {oid} with Waste King analysis")
                 processing_stats['total_processed'] += 1
                 return oid
             except Exception as e:
-                log_error(f"Database error: {oid}", e)
+                log_error(f"Database error storing OID {oid}", e)
                 processing_stats['total_errors'] += 1
                 return None
             finally:
                 conn.close()
                 
     except Exception as e:
-        log_error(f"Processing error: {oid}", e)
+        log_error(f"Unexpected error processing OID {oid}", e)
         processing_stats['total_errors'] += 1
         return None
 
@@ -1014,6 +1296,7 @@ def fetch_and_transcribe_recent_calls():
     while background_process_running:
         try:
             time_window_start = datetime.now() - timedelta(minutes=60)
+            log_with_timestamp(f"🔄 Polling for calls since {time_window_start}")
             
             if not session_token and not xelion_login():
                 time.sleep(60)
@@ -1049,6 +1332,7 @@ def fetch_and_transcribe_recent_calls():
 def analyze_transcription_with_wasteking_criteria(transcript: str, oid: str = "unknown") -> Optional[Dict]:
     """Analyze transcription with WASTE KING SPECIFIC criteria from induction manual"""
     if not OPENAI_AVAILABLE or not OPENAI_API_KEY or OPENAI_API_KEY == 'your_openai_api_key':
+        log_with_timestamp(f"OpenAI not available for OID {oid} - using fallback Waste King scores")
         # Return fallback scores for Waste King criteria
         import random
         random.seed(len(transcript))
@@ -1083,6 +1367,8 @@ def analyze_transcription_with_wasteking_criteria(transcript: str, oid: str = "u
     # Truncate long transcripts
     if len(transcript) > 4000:
         transcript = transcript[:4000] + "... (truncated)"
+    
+    log_with_timestamp(f"🤖 Starting Waste King criteria analysis for OID {oid}")
     
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -1180,6 +1466,7 @@ Transcript: {transcript}"""
         if 'summary' not in analysis_json:
             analysis_json['summary'] = "Waste King analysis completed."
         
+        log_with_timestamp(f"✅ Waste King criteria analysis successful for OID {oid}")
         return analysis_json
         
     except Exception as e:
@@ -1290,7 +1577,7 @@ Thank you!"""
             "success": True,
             "sms_sid": message.sid,
             "phone_number": clean_phone,
-            "message": f"Payment link sent"
+            "message": f"Payment link sent to {customer_phone}"
         }
         
     except Exception as e:
@@ -1305,6 +1592,11 @@ Thank you!"""
 app = Flask(__name__)
 init_db()
 
+
+@app.route('/demo')
+def demo():
+    return render_template('demo.html')
+    
 # --- Flask Routes ---
 @app.route('/')
 def index():
@@ -1319,12 +1611,6 @@ def index():
         log_with_timestamp("✅ Waste King monitoring auto-started")
     
     return render_template('index.html')
-
-@app.route('/')
-def demo():
-    
-    return render_template('demo.html')
-
 
 @app.route('/status')
 def get_status():
@@ -1345,349 +1631,16 @@ def get_status():
         "last_error": processing_stats.get('last_error', 'None')
     })
 
-# --- FIXED: ADD THE MISSING ROUTE ELEVENLABS NEEDS ---
-@app.route('/api/wasteking-quote', methods=['POST'])
-def wasteking_quote():
-    """ElevenLabs wasteking quote endpoint - CLEAN LOGGING"""
-    log_with_timestamp("🎯 WASTEKING QUOTE REQUEST")
-    
-    try:
-        data = request.get_json() or request.form.to_dict() or request.args.to_dict()
-        
-        if not data:
-            return jsonify({
-                "status": "error",
-                "message": "No data provided",
-                "quote_id": generate_short_id("WK")
-            }), 200
-
-        postcode = data.get('postcode', '').strip()
-        service = data.get('service', '').strip()
-        
-        log_with_timestamp(f"📍 Quote request: {postcode}, {service}")
-        
-        if not postcode or not service:
-            return jsonify({
-                "status": "error", 
-                "message": "Postcode and service required",
-                "quote_id": generate_short_id("WK")
-            }), 200
-
-        # Clean postcode
-        postcode_clean = postcode.upper().replace(' ', '')
-        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$'
-        
-        if not re.match(uk_postcode_pattern, postcode_clean):
-            return jsonify({
-                "status": "error",
-                "message": f"Invalid UK postcode: {postcode}",
-                "quote_id": generate_short_id("WK")
-            }), 200
-
-        # Reformat postcode
-        if len(postcode_clean) >= 5:
-            postcode = f"{postcode_clean[:-3]} {postcode_clean[-3:]}"
-
-        # Service mapping
-        service_mapping = {
-            "skip hire": "skip", "skip": "skip", "skips": "skip",
-            "man and van": "mav", "man & van": "mav", "van": "mav",
-            "grab hire": "grab", "grab": "grab",
-            "collection": "collections", "collections": "collections",
-            "clearance": "clearance", "house clearance": "clearance"
-        }
-        
-        wasteking_service = service_mapping.get(service.lower(), service.lower())
-
-        # WasteKing API call
-        headers = {"x-wasteking-request": WASTEKING_ACCESS_TOKEN, "Content-Type": "application/json"}
-        
-        # Create booking
-        create_response = requests.post(
-            f"{WASTEKING_BASE_URL}api/booking/create/",
-            headers=headers,
-            json={"type": "chatbot", "source": "wasteking.co.uk"},
-            timeout=15, verify=False
-        )
-        
-        if create_response.status_code != 200:
-            return jsonify({
-                "status": "success",
-                "quote_id": generate_short_id("WK"),
-                "message": "Let me transfer you to our team for pricing",
-                "should_transfer": True
-            }), 200
-
-        booking_ref = create_response.json().get('bookingRef')
-        if not booking_ref:
-            return jsonify({
-                "status": "success", 
-                "quote_id": generate_short_id("WK"),
-                "message": "System busy, transferring to our team",
-                "should_transfer": True
-            }), 200
-
-        # Update with search
-        update_response = requests.post(
-            f"{WASTEKING_BASE_URL}api/booking/update/",
-            headers=headers,
-            json={
-                "bookingRef": booking_ref,
-                "search": {"postCode": postcode, "service": wasteking_service}
-            },
-            timeout=20, verify=False
-        )
-
-        # Store quote
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, status, agent_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                booking_ref, booking_ref, postcode, wasteking_service, 
-                json.dumps(update_response.json() if update_response.status_code == 200 else {}),
-                datetime.now().isoformat(),
-                'success' if update_response.status_code == 200 else 'no_results',
-                data.get('agent_name', 'System')
-            ))
-            conn.commit()
-            conn.close()
-
-        if update_response.status_code == 200:
-            log_with_timestamp(f"✅ Quote successful: {booking_ref}")
-            return jsonify({
-                "status": "success",
-                "quote_id": booking_ref,
-                "message": f"Great! I can offer {wasteking_service} service for {postcode}. Your quote reference is {booking_ref}.",
-                "has_pricing": True,
-                "bookingRef": booking_ref
-            }), 200
-        else:
-            log_with_timestamp(f"❌ No service available: {postcode}")
-            return jsonify({
-                "status": "success",
-                "quote_id": booking_ref,
-                "message": f"Sorry, we don't service {postcode} for {wasteking_service}. Let me transfer you.",
-                "has_pricing": False,
-                "should_transfer": True
-            }), 200
-
-    except Exception as e:
-        log_error("Wasteking quote error", e)
-        return jsonify({
-            "status": "success",
-            "quote_id": generate_short_id("WK"), 
-            "message": "Let me transfer you to our team",
-            "should_transfer": True
-        }), 200
-
 # --- PRICING AND PAYMENT ENDPOINTS (SIMPLIFIED LOGGING) ---
 
-@app.route('/api/get-wasteking-prices', methods=['POST'])
-def get_wasteking_prices_from_api():
-    """Get WasteKing pricing - SIMPLIFIED LOGGING"""
-    log_with_timestamp("🎯 WASTEKING PRICING ENDPOINT CALLED")
-    
-    try:
-        # Handle different content types
-        data = None
-        if request.is_json and request.json:
-            data = request.json
-        elif request.form:
-            data = request.form.to_dict()
-        elif request.args:
-            data = request.args.to_dict()
-        
-        if not data:
-            return jsonify({
-                "status": "error",
-                "message": "No data provided. Please provide postcode and service.",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200
-
-        postcode = data.get('postcode')
-        service = data.get('service', '').strip()
-        
-        log_with_timestamp(f"📍 Request - Postcode: {postcode}, Service: '{service}'")
-        
-        if not postcode or not service:
-            return jsonify({
-                "status": "error",
-                "message": "Postcode and service are required",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200
-
-        # Clean and validate postcode
-        postcode_clean = postcode.upper().replace(' ', '')
-        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9][A-Z0-9]?[0-9][A-Z]{2}$'
-        
-        if not re.match(uk_postcode_pattern, postcode_clean):
-            return jsonify({
-                "status": "error",
-                "message": f"'{postcode}' is not a valid UK postcode. Please provide a valid postcode like 'LS1 4ED'.",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200
-
-        # Re-format postcode properly
-        if len(postcode_clean) >= 5:
-            postcode = f"{postcode_clean[:-3]} {postcode_clean[-3:]}"
-
-        # FIXED service mapping - Use correct WasteKing API values
-        service_lower = service.lower().strip()
-        service_mapping = {
-            # Skip Hire
-            "skip hire": "skip",
-            "skip": "skip",
-            "skips": "skip",
-            "skip rental": "skip",
-            "hire skip": "skip",
-            
-            # Man & Van
-            "man and van": "mav",
-            "man in van": "mav", 
-            "man & van": "mav",  
-            "man with van": "mav",
-            "van": "mav",
-            "van service": "mav",
-            "van collection": "mav",
-            "man van": "mav",
-            
-            # Grab Hire
-            "grab hire": "grab",
-            "grab": "grab",
-            "grab lorry": "grab",
-            
-            # Collections
-            "collection": "collections",
-            "collections": "collections",
-            "waste collection": "collections",
-            "rubbish collection": "collections",
-            
-            # Clearance
-            "house clearance": "clearance",
-            "clearance": "clearance",
-            "property clearance": "clearance",
-        }
-        
-        wasteking_service = service_mapping.get(service_lower, service_lower)
-        log_with_timestamp(f"🔄 Mapped service '{service}' → '{wasteking_service}' for postcode {postcode}")
-
-        # Headers for WasteKing API
-        headers = {
-            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
-            "Content-Type": "application/json"
-        }
-
-        # Step 1: Create booking reference
-        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
-        create_payload = {
-            "type": "chatbot",
-            "source": "wasteking.co.uk"
-        }
-        
-        create_response = requests.post(create_url, headers=headers, json=create_payload, timeout=15, verify=False)
-        
-        if create_response.status_code != 200:
-            return jsonify({
-                "status": "error",
-                "message": "Unable to get pricing at this time. Please contact us directly.",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200
-
-        create_data = create_response.json()
-        booking_ref = create_data.get('bookingRef')
-
-        if not booking_ref:
-            return jsonify({
-                "status": "error",
-                "message": "System error occurred. Please contact us directly.",
-                "quote_id": generate_short_id("WK"),
-                "timestamp": datetime.now().isoformat()
-            }), 200
-
-        # Use the actual booking_ref as the quote_id
-        quote_id = booking_ref
-        log_with_timestamp(f"✅ Created WasteKing booking reference: {quote_id}")
-
-        # Step 2: Update booking with search
-        update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
-        update_payload = {
-            "bookingRef": booking_ref,
-            "search": {
-                "postCode": postcode,
-                "service": wasteking_service
-            }
-        }
-        
-        update_response = requests.post(update_url, headers=headers, json=update_payload, timeout=20, verify=False)
-        update_data = update_response.json()
-
-        # Store without logging sensitive phone data
-        agent_name = data.get('agent_name', 'Thomas')
-        call_sid = data.get('call_sid', 'Unknown')
-        elevenlabs_conversation_id = data.get('elevenlabs_conversation_id', 'Unknown')
-
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO price_quotes (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                quote_id, booking_ref, postcode, wasteking_service, json.dumps(update_data), 
-                datetime.now().isoformat(), agent_name, 
-                'no_results' if update_response.status_code != 200 else 'pending',
-                call_sid, elevenlabs_conversation_id
-            ))
-            conn.commit()
-            conn.close()
-
-        # Return response
-        if update_response.status_code == 200:
-            return jsonify({
-                "status": "success",
-                "quote_id": quote_id,
-                "message": f"I can offer you {wasteking_service} service for {postcode}. Your quote reference is {quote_id}. Would you like me to proceed with booking?",
-                "has_pricing": True,
-                "pricing_available": True,
-                "bookingRef": booking_ref,
-                "search_results": update_data,
-                "postcode": postcode,
-                "service": wasteking_service,
-                "timestamp": datetime.now().isoformat()
-            }), 200
-        else:
-            return jsonify({
-                "status": "success",
-                "quote_id": quote_id,
-                "message": f"I'm sorry, we don't currently offer {wasteking_service} service in {postcode}. Let me transfer you to our specialist team.",
-                "has_pricing": False,
-                "pricing_available": False,
-                "should_transfer": True,
-                "timestamp": datetime.now().isoformat()
-            }), 200
-
-    except Exception as e:
-        log_error("WasteKing API error", e)
-        return jsonify({
-            "status": "success",
-            "quote_id": generate_short_id("WK"),
-            "message": "Let me transfer you to our team who can help you with pricing.",
-            "has_pricing": False,
-            "should_transfer": True,
-            "timestamp": datetime.now().isoformat()
-        }), 200
+# --- REMOVE OLD ENDPOINTS - ONLY USE EXACT WORKFLOW ---
 
 @app.route('/api/send-payment-sms', methods=['POST'])
 def send_payment_sms():
-    """Handle payment requests from ElevenLabs - SIMPLIFIED LOGGING"""
-    log_with_timestamp("💳 PAYMENT SMS REQUEST")
+    """Handle payment requests from ElevenLabs - EXACT as working before"""
+    log_with_timestamp("="*50)
+    log_with_timestamp("💳 PAYMENT SMS ENDPOINT CALLED")
+    log_with_timestamp("="*50)
     
     try:
         # 1. Parse incoming JSON
@@ -1720,172 +1673,7 @@ def send_payment_sms():
         elif phone.startswith('44'):
             phone = f"+{phone}"
         
-        if not re.match(r'^\+44\d{9,10}$', phone):
-            return jsonify({
-                "status": "error",
-                "message": "Invalid UK phone number format",
-                "example": "+447700900123"
-            }), 400
-
-        # 4. Force £1 amount as specified
-        amount = "1.00"
-
-        # 5. Get quote_id from the call_sid or use it directly
-        quote_id = data.get('quote_id', data['call_sid'])
-
-        # 6. Send SMS via Twilio - NO PHONE LOGGING
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        message = client.messages.create(
-            body=f"Waste King Payment\nAmount: £{amount}\nReference: {quote_id}\nPay now: {PAYPAL_PAYMENT_LINK}",
-            from_=TWILIO_PHONE_NUMBER,
-            to=phone
-        )
-
-        log_with_timestamp(f"✅ SMS sent successfully: {message.sid}")
-
-        # 7. Store in database with MINIMAL logging
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO sms_payments 
-                (quote_id, customer_phone, amount, sms_sid, call_sid, elevenlabs_conversation_id, created_at, paypal_link) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                quote_id,
-                phone,
-                float(amount),
-                message.sid,
-                data['call_sid'],
-                data.get('elevenlabs_conversation_id', 'Unknown'),
-                datetime.now().isoformat(),
-                PAYPAL_PAYMENT_LINK
-            ))
-            conn.commit()
-            conn.close()
-
-        return jsonify({
-            "status": "success",
-            "message": f"SMS sent successfully",
-            "amount": f"£{amount}",
-            "call_sid": data['call_sid'],
-            "quote_id": quote_id
-        })
-
-    except Exception as e:
-        log_error("Payment processing failed", e)
-        return jsonify({
-            "status": "error",
-            "message": "System error",
-            "debug": str(e)
-        }), 500
-
-@app.route('/api/check-postcode', methods=['POST'])
-def check_postcode():
-    """Check if WasteKing services the given postcode"""
-    log_with_timestamp("📍 POSTCODE CHECK REQUEST")
-    
-    try:
-        data = request.get_json()
-        postcode = data.get('postcode', '').upper().strip()
-        
-        if not postcode:
-            return jsonify({
-                'success': False,
-                'error': 'Postcode required',
-                'speak': 'I need your postcode to check if we can service your area.'
-            }), 400
-        
-        # Basic UK postcode validation
-        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9R][0-9A-Z]? [0-9][A-Z]{2}$'
-        
-        if re.match(uk_postcode_pattern, postcode):
-            service_available = True
-            speak_text = f"Great! We do service {postcode}. What type of service are you looking for today?"
-        else:
-            service_available = False
-            speak_text = f"I'm sorry, {postcode} appears to be outside our service area. Let me transfer you to our team to see if we can arrange something special for you."
-        
-        log_with_timestamp(f"📍 Postcode {postcode}: {'✅ Available' if service_available else '❌ Not available'}")
-        
-        return jsonify({
-            'success': True,
-            'postcode': postcode,
-            'service_available': service_available,
-            'speak': speak_text
-        })
-        
-    except Exception as e:
-        log_error("Error in check_postcode endpoint", e)
-        return jsonify({
-            'success': False,
-            'error': 'Internal server error',
-            'speak': 'There was an issue checking your postcode. What postcode would you like to check?'
-        }), 500
-
-# --- FIXED: ADD MISSING DASHBOARD ROUTES ---
-@app.route('/get_calls_list')
-def get_calls_list():
-    """Get calls list"""
-    try:
-        page = int(request.args.get('page', 1))
-        per_page = int(request.args.get('per_page', 50))
-        agent = request.args.get('agent', '')
-        category = request.args.get('category', '')
-        audio_filter = request.args.get('audio_filter', '')
-        
-        offset = (page - 1) * per_page
-        where_conditions = []
-        params = []
-        
-        if agent:
-            where_conditions.append("agent_name LIKE ?")
-            params.append(f"%{agent}%")
-        if category:
-            where_conditions.append("category = ?")
-            params.append(category)
-        if audio_filter == 'with_audio':
-            where_conditions.append("transcription_text IS NOT NULL")
-        
-        where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
-        
-        with db_lock:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute(f"SELECT COUNT(*) FROM calls {where_clause}", params)
-            total_calls = cursor.fetchone()[0]
-            
-            cursor.execute(f"""
-                SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
-                       duration_seconds, status, category, transcription_text,
-                       overall_waste_king_score, processed_at
-                FROM calls {where_clause}
-                ORDER BY call_datetime DESC LIMIT ? OFFSET ?
-            """, params + [per_page, offset])
-            calls = cursor.fetchall()
-            conn.close()
-        
-        calls_list = []
-        for call in calls:
-            calls_list.append({
-                'oid': call[0], 'call_datetime': call[1], 'agent_name': call[2],
-                'phone_number': call[3], 'call_direction': call[4], 'duration_seconds': call[5],
-                'status': call[6], 'category': call[7], 'has_transcription': bool(call[8]),
-                'overall_waste_king_score': call[9] or 0, 'processed_at': call[10]
-            })
-        
-        total_pages = (total_calls + per_page - 1) // per_page
-        
-        return jsonify({
-            'calls': calls_list,
-            'pagination': {
-                'page': page, 'per_page': per_page, 'total_calls': total_calls,
-                'total_pages': total_pages, 'has_next': page < total_pages, 'has_prev': page > 1
-            }
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        if not re.match(r'^\+44\d{9,10}
 
 # --- Dashboard Data with Waste King Criteria ---
 @app.route('/get_dashboard_data')
@@ -1977,19 +1765,527 @@ def get_dashboard_data():
             "processing_stats": processing_stats
         })
 
+# Add these missing Flask routes to your app.py file
+
+# Fix 1: Add the missing /get_calls_list route
+@app.route('/get_calls_list')
+def get_calls_list():
+    """Get paginated calls list with filtering"""
+    try:
+        # Get query parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        agent = request.args.get('agent', '')
+        category = request.args.get('category', '')
+        audio_filter = request.args.get('audio_filter', '')
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        
+        if agent:
+            where_conditions.append("agent_name LIKE ?")
+            params.append(f"%{agent}%")
+        
+        if category:
+            where_conditions.append("category = ?")
+            params.append(category)
+        
+        if audio_filter == 'with_audio':
+            where_conditions.append("transcription_text IS NOT NULL AND transcription_text != ''")
+        elif audio_filter == 'no_audio':
+            where_conditions.append("(transcription_text IS NULL OR transcription_text = '')")
+        
+        where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+        
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM calls {where_clause}"
+            cursor.execute(count_query, params)
+            total_calls = cursor.fetchone()[0]
+            
+            # Get paginated results
+            query = f"""
+                SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
+                       duration_seconds, status, category, transcription_text,
+                       transcribed_duration_minutes, word_count, confidence,
+                       overall_waste_king_score, processed_at
+                FROM calls {where_clause}
+                ORDER BY call_datetime DESC
+                LIMIT ? OFFSET ?
+            """
+            cursor.execute(query, params + [per_page, offset])
+            calls = cursor.fetchall()
+            
+            conn.close()
+        
+        # Convert to list of dicts
+        calls_list = []
+        for call in calls:
+            calls_list.append({
+                'oid': call[0],
+                'call_datetime': call[1],
+                'agent_name': call[2],
+                'phone_number': call[3],
+                'call_direction': call[4],
+                'duration_seconds': call[5],
+                'status': call[6],
+                'category': call[7],
+                'has_transcription': bool(call[8]),
+                'transcribed_duration_minutes': call[9],
+                'word_count': call[10] or 0,
+                'confidence': call[11] or 0,
+                'overall_waste_king_score': call[12] or 0,
+                'processed_at': call[13]
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_calls + per_page - 1) // per_page
+        
+        return jsonify({
+            'calls': calls_list,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_calls': total_calls,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        })
+        
+    except Exception as e:
+        log_error("Error in get_calls_list", e)
+        return jsonify({'error': str(e)}), 500
+
+# Fix 2: Add route to get individual call details
+@app.route('/get_call_details/<oid>')
+def get_call_details(oid):
+    """Get detailed call information"""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM calls WHERE oid = ?", (oid,))
+            call = cursor.fetchone()
+            conn.close()
+        
+        if not call:
+            return jsonify({'error': 'Call not found'}), 404
+        
+        # Convert to dict with all Waste King criteria
+        call_details = {
+            'oid': call[0],
+            'call_datetime': call[1],
+            'agent_name': call[2],
+            'phone_number': call[3],
+            'call_direction': call[4],
+            'duration_seconds': call[5],
+            'status': call[6],
+            'user_id': call[7],
+            'transcription_text': call[8],
+            'transcribed_duration_minutes': call[9],
+            'deepgram_cost_usd': call[10],
+            'deepgram_cost_gbp': call[11],
+            'word_count': call[12],
+            'confidence': call[13],
+            'language': call[14],
+            'waste_king_scores': {
+                'call_handling_telephone_manner': call[15],
+                'customer_needs_assessment': call[16],
+                'product_knowledge_information': call[17],
+                'objection_handling_erica': call[18],
+                'sales_closing': call[19],
+                'compliance_procedures': call[20],
+                'professional_telephone_manner': call[21],
+                'listening_customer_requirements': call[22],
+                'presenting_appropriate_solutions': call[23],
+                'postcode_gathering': call[24],
+                'waste_type_identification': call[25],
+                'prohibited_items_check': call[26],
+                'access_assessment': call[27],
+                'permit_requirements': call[28],
+                'offering_options': call[29],
+                'erica_objection_method': call[30],
+                'sales_recommendation': call[31],
+                'asking_for_sale': call[32],
+                'following_procedures': call[33],
+                'communication_guidelines': call[34],
+                'overall_waste_king_score': call[39]
+            },
+            'category': call[35],
+            'processed_at': call[36],
+            'processing_error': call[37],
+            'raw_communication_data': call[38],
+            'summary_translation': call[40]
+        }
+        
+        return jsonify(call_details)
+        
+    except Exception as e:
+        log_error(f"Error getting call details for {oid}", e)
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     # Disable Flask logging to reduce noise
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
     
-    log_with_timestamp("🚀 Starting Waste King System with Clean Logging...")
+    log_with_timestamp("🚀 Starting Waste King System with EXACT API WORKFLOW FROM IMAGES...")
     log_with_timestamp("✅ Features:")
-    log_with_timestamp("  • Fixed missing /api/wasteking-quote route")
-    log_with_timestamp("  • Fixed missing /get_calls_list route") 
-    log_with_timestamp("  • Fixed SQL column mismatch")
-    log_with_timestamp("  • Clean logging (no phone numbers)")
-    log_with_timestamp("  • Only custom tool calls shown in console")
+    log_with_timestamp("  • EXACT: Multi-step WasteKing API workflow from your screenshots")
+    log_with_timestamp("  • Step 1: Must have postcode, service, type")
+    log_with_timestamp("  • Step 2: Customer details (firstName, lastName, etc.)")
+    log_with_timestamp("  • Step 3: Service details (date, time, placement, etc.)")
+    log_with_timestamp("  • Final: Quote generation with paymentLink")
+    log_with_timestamp("  • /api/wasteking-quote follows exact screenshot workflow")
+    log_with_timestamp("  • Waste King evaluation criteria maintained")
+    log_with_timestamp("  • SMS payments working as before")
     
     port = int(os.environ.get("PORT", 5000))
+    # Disable debug and verbose logging
+    app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False), phone):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid UK phone number format",
+                "example": "+447700900123"
+            }), 400
+
+        # 4. Force £1 amount as specified
+        amount = "1.00"
+
+        # 5. Get quote_id from the call_sid or use it directly
+        quote_id = data.get('quote_id', data['call_sid'])
+
+        # 6. Send SMS via Twilio - NO PHONE LOGGING
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message = client.messages.create(
+            body=f"Waste King Payment\nAmount: £{amount}\nReference: {quote_id}\nPay now: {PAYPAL_PAYMENT_LINK}",
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone
+        )
+
+        log_with_timestamp(f"✅ SMS sent successfully: {message.sid}")
+
+        # 7. Store in database with MINIMAL logging
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments 
+                (quote_id, customer_phone, amount, sms_sid, call_sid, elevenlabs_conversation_id, created_at, paypal_link) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                quote_id,
+                phone,
+                float(amount),
+                message.sid,
+                data['call_sid'],
+                data.get('elevenlabs_conversation_id', 'Unknown'),
+                datetime.now().isoformat(),
+                PAYPAL_PAYMENT_LINK
+            ))
+            conn.commit()
+            conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"SMS sent successfully",
+            "amount": f"£{amount}",
+            "call_sid": data['call_sid'],
+            "quote_id": quote_id
+        })
+
+    except Exception as e:
+        log_error("Payment processing failed", e)
+        return jsonify({
+            "status": "error",
+            "message": "System error",
+            "debug": str(e)
+        }), 500
+
+# --- Dashboard Data with Waste King Criteria ---
+@app.route('/get_dashboard_data')
+def get_dashboard_data():
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Total counts
+        cursor.execute("SELECT COUNT(*) FROM calls")
+        total_calls = cursor.fetchone()[0]
+
+        cursor.execute("SELECT SUM(deepgram_cost_gbp) FROM calls")
+        total_cost_gbp = cursor.fetchone()[0] or 0.0
+
+        cursor.execute("SELECT SUM(transcribed_duration_minutes) FROM calls")
+        total_duration_minutes = cursor.fetchone()[0] or 0.0
+
+        # WASTE KING SPECIFIC AVERAGES
+        cursor.execute("""
+            SELECT AVG(call_handling_telephone_manner), AVG(customer_needs_assessment), 
+                   AVG(product_knowledge_information), AVG(objection_handling_erica),
+                   AVG(sales_closing), AVG(compliance_procedures)
+            FROM calls
+        """)
+        avg_main_scores = cursor.fetchone()
+        avg_call_handling = round(avg_main_scores[0] or 0, 2)
+        avg_needs_assessment = round(avg_main_scores[1] or 0, 2)
+        avg_product_knowledge = round(avg_main_scores[2] or 0, 2)
+        avg_objection_handling = round(avg_main_scores[3] or 0, 2)
+        avg_sales_closing = round(avg_main_scores[4] or 0, 2)
+        avg_compliance = round(avg_main_scores[5] or 0, 2)
+
+        # Sub-category averages for Waste King
+        cursor.execute("""
+            SELECT AVG(professional_telephone_manner), AVG(listening_customer_requirements), 
+                   AVG(presenting_appropriate_solutions), AVG(postcode_gathering),
+                   AVG(waste_type_identification), AVG(prohibited_items_check),
+                   AVG(access_assessment), AVG(permit_requirements),
+                   AVG(offering_options), AVG(erica_objection_method),
+                   AVG(sales_recommendation), AVG(asking_for_sale),
+                   AVG(following_procedures), AVG(communication_guidelines)
+            FROM calls
+        """)
+        avg_subs = cursor.fetchone()
+        waste_king_subs = {
+            "professional_telephone_manner": round(avg_subs[0] or 0, 2),
+            "listening_customer_requirements": round(avg_subs[1] or 0, 2),
+            "presenting_appropriate_solutions": round(avg_subs[2] or 0, 2),
+            "postcode_gathering": round(avg_subs[3] or 0, 2),
+            "waste_type_identification": round(avg_subs[4] or 0, 2),
+            "prohibited_items_check": round(avg_subs[5] or 0, 2),
+            "access_assessment": round(avg_subs[6] or 0, 2),
+            "permit_requirements": round(avg_subs[7] or 0, 2),
+            "offering_options": round(avg_subs[8] or 0, 2),
+            "erica_objection_method": round(avg_subs[9] or 0, 2),
+            "sales_recommendation": round(avg_subs[10] or 0, 2),
+            "asking_for_sale": round(avg_subs[11] or 0, 2),
+            "following_procedures": round(avg_subs[12] or 0, 2),
+            "communication_guidelines": round(avg_subs[13] or 0, 2),
+        }
+
+        # Category ratings using Waste King categories
+        category_ratings = {}
+        categories = ["skip hire", "man and van", "collections", "grab hire", "clearance", "general enquiry", "complaint"] 
+        for cat in categories:
+            cursor.execute("SELECT AVG(overall_waste_king_score), COUNT(*) FROM calls WHERE category = ?", (cat,))
+            result = cursor.fetchone()
+            avg_score = round(result[0] or 0, 2)
+            count = result[1]
+            category_ratings[cat] = {"average_score": avg_score, "count": count}
+
+        conn.close()
+
+        return jsonify({
+            "total_calls": total_calls,
+            "total_cost_gbp": round(total_cost_gbp, 2),
+            "total_duration_minutes": round(total_duration_minutes, 2),
+            "waste_king_main_ratings": {
+                "call_handling_telephone_manner": avg_call_handling,
+                "customer_needs_assessment": avg_needs_assessment,
+                "product_knowledge_information": avg_product_knowledge,
+                "objection_handling_erica": avg_objection_handling,
+                "sales_closing": avg_sales_closing,
+                "compliance_procedures": avg_compliance
+            },
+            "waste_king_sub_ratings": waste_king_subs,
+            "category_call_ratings": category_ratings,
+            "processing_stats": processing_stats
+        })
+
+# Add these missing Flask routes to your app.py file
+
+# Fix 1: Add the missing /get_calls_list route
+@app.route('/get_calls_list')
+def get_calls_list():
+    """Get paginated calls list with filtering"""
+    try:
+        # Get query parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        agent = request.args.get('agent', '')
+        category = request.args.get('category', '')
+        audio_filter = request.args.get('audio_filter', '')
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        
+        if agent:
+            where_conditions.append("agent_name LIKE ?")
+            params.append(f"%{agent}%")
+        
+        if category:
+            where_conditions.append("category = ?")
+            params.append(category)
+        
+        if audio_filter == 'with_audio':
+            where_conditions.append("transcription_text IS NOT NULL AND transcription_text != ''")
+        elif audio_filter == 'no_audio':
+            where_conditions.append("(transcription_text IS NULL OR transcription_text = '')")
+        
+        where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+        
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM calls {where_clause}"
+            cursor.execute(count_query, params)
+            total_calls = cursor.fetchone()[0]
+            
+            # Get paginated results
+            query = f"""
+                SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
+                       duration_seconds, status, category, transcription_text,
+                       transcribed_duration_minutes, word_count, confidence,
+                       overall_waste_king_score, processed_at
+                FROM calls {where_clause}
+                ORDER BY call_datetime DESC
+                LIMIT ? OFFSET ?
+            """
+            cursor.execute(query, params + [per_page, offset])
+            calls = cursor.fetchall()
+            
+            conn.close()
+        
+        # Convert to list of dicts
+        calls_list = []
+        for call in calls:
+            calls_list.append({
+                'oid': call[0],
+                'call_datetime': call[1],
+                'agent_name': call[2],
+                'phone_number': call[3],
+                'call_direction': call[4],
+                'duration_seconds': call[5],
+                'status': call[6],
+                'category': call[7],
+                'has_transcription': bool(call[8]),
+                'transcribed_duration_minutes': call[9],
+                'word_count': call[10] or 0,
+                'confidence': call[11] or 0,
+                'overall_waste_king_score': call[12] or 0,
+                'processed_at': call[13]
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_calls + per_page - 1) // per_page
+        
+        return jsonify({
+            'calls': calls_list,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_calls': total_calls,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        })
+        
+    except Exception as e:
+        log_error("Error in get_calls_list", e)
+        return jsonify({'error': str(e)}), 500
+
+# Fix 2: Add route to get individual call details
+@app.route('/get_call_details/<oid>')
+def get_call_details(oid):
+    """Get detailed call information"""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM calls WHERE oid = ?", (oid,))
+            call = cursor.fetchone()
+            conn.close()
+        
+        if not call:
+            return jsonify({'error': 'Call not found'}), 404
+        
+        # Convert to dict with all Waste King criteria
+        call_details = {
+            'oid': call[0],
+            'call_datetime': call[1],
+            'agent_name': call[2],
+            'phone_number': call[3],
+            'call_direction': call[4],
+            'duration_seconds': call[5],
+            'status': call[6],
+            'user_id': call[7],
+            'transcription_text': call[8],
+            'transcribed_duration_minutes': call[9],
+            'deepgram_cost_usd': call[10],
+            'deepgram_cost_gbp': call[11],
+            'word_count': call[12],
+            'confidence': call[13],
+            'language': call[14],
+            'waste_king_scores': {
+                'call_handling_telephone_manner': call[15],
+                'customer_needs_assessment': call[16],
+                'product_knowledge_information': call[17],
+                'objection_handling_erica': call[18],
+                'sales_closing': call[19],
+                'compliance_procedures': call[20],
+                'professional_telephone_manner': call[21],
+                'listening_customer_requirements': call[22],
+                'presenting_appropriate_solutions': call[23],
+                'postcode_gathering': call[24],
+                'waste_type_identification': call[25],
+                'prohibited_items_check': call[26],
+                'access_assessment': call[27],
+                'permit_requirements': call[28],
+                'offering_options': call[29],
+                'erica_objection_method': call[30],
+                'sales_recommendation': call[31],
+                'asking_for_sale': call[32],
+                'following_procedures': call[33],
+                'communication_guidelines': call[34],
+                'overall_waste_king_score': call[39]
+            },
+            'category': call[35],
+            'processed_at': call[36],
+            'processing_error': call[37],
+            'raw_communication_data': call[38],
+            'summary_translation': call[40]
+        }
+        
+        return jsonify(call_details)
+        
+    except Exception as e:
+        log_error(f"Error getting call details for {oid}", e)
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    # Disable Flask logging to reduce noise
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
+    log_with_timestamp("🚀 Starting Waste King System with NEW BOOKING WORKFLOW...")
+    log_with_timestamp("✅ Features:")
+    log_with_timestamp("  • NEW: Multi-step WasteKing booking API workflow")
+    log_with_timestamp("  • NEW: /api/wasteking-quote endpoint for complete bookings")
+    log_with_timestamp("  • Waste King specific evaluation criteria from induction manual")
+    log_with_timestamp("  • ERICA objection handling assessment")
+    log_with_timestamp("  • Call handling & telephone manner scoring")
+    log_with_timestamp("  • Customer needs assessment (postcode, waste type, etc.)")
+    log_with_timestamp("  • Sales closing and recommendation tracking")
+    log_with_timestamp("  • Compliance and procedures monitoring")
+    log_with_timestamp("  • Simplified webhook logging (no sensitive data)")
+    
+    port = int(os.environ.get("PORT", 5000))
+    # Disable debug and verbose logging
     app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False)
