@@ -1397,6 +1397,11 @@ Thank you!"""
 app = Flask(__name__)
 init_db()
 
+
+@app.route('/demo')
+def index():
+    return render_template('demo.html')
+    
 # --- Flask Routes ---
 @app.route('/')
 def index():
