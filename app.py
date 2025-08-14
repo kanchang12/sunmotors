@@ -629,6 +629,510 @@ def xelion_login() -> bool:
             log_error(f"Failed to log in to Xelion", e)
             return False
 
+def fetch_all_communications_from_start_time(until_date: datetime, start_time: datetime) -> List[Dict]:
+    """Fetch calls from start_time onwards"""
+    all_communications = []
+    before_oid = None
+    page = 1
+    
+    # Use the working base URLs pattern
+    base_urls_to_try = [
+        XELION_BASE_URL,  
+        XELION_BASE_URL.replace('/wasteking', '/master'), 
+        'https://lvsl01.xelion.com/api/v1/master', 
+    ]
+    
+    while True:
+        params = {'limit': 1000}  # High limit per page
+        if until_date:
+            params['until'] = until_date.strftime('%Y-%m-%d %H:%M:%S')
+        if before_oid:
+            params['before'] = before_oid
+        
+        fetched_this_page = False
+        
+        for attempt in range(3):
+            for base_url in base_urls_to_try:
+                communications_url = f"{base_url.rstrip('/')}/communications"
+                try:
+                    log_with_timestamp(f"Fetching page {page} from {communications_url} (attempt {attempt + 1})")
+                    response = xelion_session.get(communications_url, params=params, timeout=30)
+                    
+                    if response.status_code == 401:
+                        log_with_timestamp("🔑 401 error, re-authenticating...")
+                        global session_token
+                        session_token = None
+                        
+                        if xelion_login():
+                            continue
+                        else:
+                            return all_communications
+                    
+                    response.raise_for_status()
+                    data = response.json()
+                    communications = data.get('data', [])
+                    
+                    if not communications:
+                        log_with_timestamp(f"No more communications found on page {page}")
+                        return all_communications
+                    
+                    # CHECK: Stop if we've gone too far back (before start_time)
+                    page_has_valid_calls = False
+                    valid_calls_this_page = []
+                    
+                    for comm in communications:
+                        comm_obj = comm.get('object', {})
+                        call_datetime = comm_obj.get('date', '')
+                        
+                        if call_datetime:
+                            try:
+                                if 'T' in call_datetime:
+                                    call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+                                else:
+                                    call_dt = datetime.strptime(call_datetime, '%Y-%m-%d %H:%M:%S')
+                                
+                                # If this call is from start_time or later, keep it
+                                if call_dt >= start_time:
+                                    valid_calls_this_page.append(comm)
+                                    page_has_valid_calls = True
+                                # If call is older than start_time, we've gone too far back
+                                else:
+                                    log_with_timestamp(f"⏹️ Reached call older than start time ({call_dt} < {start_time})")
+                                    # Add valid calls from this page and stop
+                                    all_communications.extend(valid_calls_this_page)
+                                    log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+                                    return all_communications
+                                    
+                            except Exception as e:
+                                log_with_timestamp(f"Error parsing date {call_datetime}: {e}")
+                    
+                    # If no valid calls on this page, we're done
+                    if not page_has_valid_calls:
+                        log_with_timestamp(f"⏹️ No calls from {start_time} onwards on page {page}")
+                        log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+                        return all_communications
+                    
+                    # Add valid calls from this page
+                    all_communications.extend(valid_calls_this_page)
+                    log_with_timestamp(f"Page {page}: Added {len(valid_calls_this_page)} valid calls (Total: {len(all_communications)})")
+                    
+                    # Track status breakdown for valid calls only
+                    status_breakdown = {}
+                    for comm in valid_calls_this_page:
+                        status = comm.get('object', {}).get('status', 'unknown')
+                        status_breakdown[status] = status_breakdown.get(status, 0) + 1
+                        processing_stats['statuses_seen'][status] = processing_stats['statuses_seen'].get(status, 0) + 1
+                    
+                    log_with_timestamp(f"Page {page} valid calls status: {status_breakdown}")
+                    
+                    # Get next page info
+                    if 'meta' in data and 'paging' in data['meta']:
+                        before_oid = data['meta']['paging'].get('previousId')
+                        if not before_oid:
+                            log_with_timestamp("No more pages available")
+                            log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+                            return all_communications
+                    else:
+                        log_with_timestamp("No paging info, assuming last page")
+                        log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+                        return all_communications
+                    
+                    fetched_this_page = True
+                    break
+                        
+                except Exception as e:
+                    log_error(f"Failed to fetch page {page} from {base_url} (attempt {attempt + 1})", e)
+                    continue
+            
+            if fetched_this_page:
+                break
+        
+        if not fetched_this_page:
+            log_error(f"Failed to fetch page {page} from all URLs and attempts")
+            break
+        
+        page += 1
+        processing_stats['total_fetched'] = len(all_communications)
+        processing_stats['last_poll_time'] = datetime.now().isoformat()
+        
+        # Small delay between pages
+        time.sleep(0.5)
+    
+    log_with_timestamp(f"🎯 FINAL: Fetched {len(all_communications)} calls from {start_time} onwards")
+    return all_communications
+
+def _extract_agent_info(comm_obj: Dict) -> Dict:
+    """Extract agent info from communication object"""
+    agent_info = {
+        'agent_name': 'Unknown',
+        'call_direction': 'Unknown',
+        'phone_number': 'Unknown',
+        'duration_seconds': 0,
+        'status': 'Unknown',
+        'user_id': 'Unknown'
+    }
+    
+    try:
+        common_name = comm_obj.get('commonName', '')
+        if common_name and '<-' in common_name:
+            parts = common_name.split('<-')
+            if len(parts) >= 2:
+                agent_info['agent_name'] = parts[0].strip()
+                phone_part = parts[1].split(',')[0].strip()
+                agent_info['phone_number'] = phone_part
+        
+        incoming = comm_obj.get('incoming')
+        if incoming is True:
+            agent_info['call_direction'] = 'Incoming'
+        elif incoming is False:
+            agent_info['call_direction'] = 'Outgoing'
+        
+        duration_sec = comm_obj.get('durationSec')
+        if duration_sec is not None:
+            agent_info['duration_seconds'] = int(duration_sec)
+        
+        agent_info['status'] = comm_obj.get('status', 'Unknown')
+        agent_info['user_id'] = comm_obj.get('id', 'Unknown')
+            
+    except Exception as e:
+        log_error(f"Error extracting agent info for OID {comm_obj.get('oid', 'Unknown')}", e)
+    
+    return agent_info
+
+def download_audio(communication_oid: str) -> Optional[str]:
+    """Download audio with better error handling and retry logic"""
+    audio_url = f"{XELION_BASE_URL.rstrip('/')}/communications/{communication_oid}/audio"
+    file_name = f"{communication_oid}.mp3"
+    file_path = os.path.join(AUDIO_TEMP_DIR, file_name)
+
+    # Try multiple times with re-auth if needed
+    for attempt in range(3):
+        try:
+            log_with_timestamp(f"🎵 Downloading audio for OID {communication_oid} (attempt {attempt + 1})")
+            
+            # Ensure we're authenticated
+            global session_token
+            if not session_token:
+                log_with_timestamp(f"No session token, re-authenticating...")
+                if not xelion_login():
+                    log_with_timestamp(f"Re-auth failed for audio download")
+                    continue
+            
+            response = xelion_session.get(audio_url, timeout=60)
+            
+            log_with_timestamp(f"Audio response: {response.status_code} for OID {communication_oid}")
+            
+            if response.status_code == 200:
+                content_length = len(response.content)
+                log_with_timestamp(f"Downloaded {content_length} bytes for OID {communication_oid}")
+                
+                if content_length > 10:  # Valid audio file
+                    with open(file_path, 'wb') as f:
+                        f.write(response.content)
+                    log_with_timestamp(f"✅ Audio saved successfully for OID {communication_oid}")
+                    return file_path
+                else:
+                    log_with_timestamp(f"❌ Audio too small ({content_length} bytes) for OID {communication_oid}")
+                    return None
+                    
+            elif response.status_code == 404:
+                log_with_timestamp(f"❌ No audio file exists for OID {communication_oid}")
+                return None
+                
+            elif response.status_code == 401:
+                log_with_timestamp(f"🔑 401 Auth error for OID {communication_oid}, retrying with fresh auth...")
+                session_token = None  # Force re-auth
+                if xelion_login():
+                    continue  # Retry with fresh token
+                else:
+                    log_with_timestamp(f"❌ Re-auth failed for OID {communication_oid}")
+                    return None
+                    
+            else:
+                pass
+                
+        except Exception as e:
+            log_error(f"Audio download attempt {attempt + 1} failed for {communication_oid}", e)
+            if attempt == 2:  # Last attempt
+                return None
+            time.sleep(2)  # Wait before retry
+    
+    log_with_timestamp(f"❌ All audio download attempts failed for OID {communication_oid}")
+    return None
+
+# --- Deepgram Transcription ---
+def transcribe_audio_deepgram(audio_file_path: str, metadata_row: Dict) -> Optional[Dict]:
+    """Transcribe audio file using Deepgram direct API"""
+    if not DEEPGRAM_API_KEY or DEEPGRAM_API_KEY == 'your_deepgram_api_key':
+        log_error("Deepgram API key not configured")
+        return None
+
+    oid = metadata_row['oid']
+    
+    if not os.path.exists(audio_file_path):
+        log_error(f"Audio file not found for transcription: {audio_file_path}")
+        return None
+    
+    try:
+        # Check file size
+        file_size = os.path.getsize(audio_file_path)
+        log_with_timestamp(f"🎵 Transcribing audio file: {file_size} bytes")
+        
+        if file_size < 10:
+            log_error(f"Audio file too small: {file_size} bytes")
+            return None
+        
+        # Use direct API
+        url = "https://api.deepgram.com/v1/listen"
+        headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}", "Content-Type": "audio/mpeg"}
+        params = {
+            "model": "nova-2", 
+            "smart_format": "true", 
+            "punctuate": "true",
+            "diarize": "true", 
+            "utterances": "true", 
+            "language": "en-GB"
+        }
+        
+        log_with_timestamp(f"🎯 Transcribing OID {oid} using Deepgram API...")
+        
+        with open(audio_file_path, 'rb') as audio_file:
+            response = requests.post(url, headers=headers, params=params, data=audio_file, timeout=120)
+        
+        log_with_timestamp(f"Deepgram response: {response.status_code}")
+        
+        if response.status_code != 200:
+            log_error(f"Deepgram API error: {response.status_code} - {response.text}")
+            return None
+        
+        result = response.json()
+        
+        # Validate response structure
+        if 'results' not in result:
+            log_error(f"Invalid response structure from Deepgram for OID {oid}: missing 'results'")
+            return None
+            
+        if not result['results'].get('channels'):
+            log_error(f"No channels in Deepgram response for OID {oid}")
+            return None
+            
+        if not result['results']['channels'][0].get('alternatives'):
+            log_error(f"No alternatives in Deepgram response for OID {oid}")
+            return None
+        
+        transcript_data = result['results']['channels'][0]['alternatives'][0]
+        transcript_text = transcript_data.get('transcript', '')
+        
+        # Get metadata
+        metadata = result.get('metadata', {})
+        duration_seconds = metadata.get('duration', 0)
+        confidence = transcript_data.get('confidence', 0)
+        language = metadata.get('detected_language', 'en')
+        
+        log_with_timestamp(f"✅ Deepgram transcription successful for OID {oid}")
+
+        if not transcript_text.strip():
+            log_with_timestamp(f"⚠️ Empty transcription for OID {oid}", "WARN")
+            return None
+        
+        # Calculate costs
+        duration_minutes = duration_seconds / 60
+        cost_usd = duration_minutes * DEEPGRAM_PRICE_PER_MINUTE
+        cost_gbp = cost_usd * USD_TO_GBP_RATE
+        word_count = len(transcript_text.split())
+
+        log_with_timestamp(f"📊 Transcription complete for OID {oid}: {word_count} words, {duration_minutes:.2f} minutes")
+
+        return {
+            'oid': oid,
+            'transcription_text': transcript_text,
+            'transcribed_duration_minutes': round(duration_minutes, 2),
+            'deepgram_cost_usd': round(cost_usd, 4),
+            'deepgram_cost_gbp': round(cost_gbp, 4),
+            'word_count': word_count,
+            'confidence': round(confidence, 3),
+            'language': language
+        }
+            
+    except Exception as e:
+        log_error(f"Deepgram transcription failed for OID {oid}", e)
+        return None
+
+def process_single_call(communication_data: Dict) -> Optional[str]:
+    """Process single call with Waste King criteria"""
+    comm_obj = communication_data.get('object', {})
+    oid = comm_obj.get('oid')
+    
+    if not oid:
+        processing_stats['total_skipped'] += 1
+        return None
+
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
+        if cursor.fetchone():
+            conn.close()
+            log_with_timestamp(f"⏭️ OID {oid} already in database, skipping")
+            processing_stats['total_skipped'] += 1
+            return None
+        conn.close()
+
+    call_datetime = comm_obj.get('date')
+    if not call_datetime:
+        processing_stats['total_skipped'] += 1
+        return None
+        
+    try:
+        if 'T' in call_datetime:
+            call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+        else:
+            call_dt = datetime.strptime(call_datetime, '%Y-%m-%d %H:%M:%S')
+            
+        if (datetime.now() - call_dt) > timedelta(minutes=60):
+            log_with_timestamp(f"⏭️ OID {oid} is older than 60 mins, skipping")
+            processing_stats['total_skipped'] += 1
+            return None
+    except Exception as e:
+        log_error(f"Error parsing datetime for OID {oid}", e)
+        processing_stats['total_skipped'] += 1
+        return None
+
+    log_with_timestamp(f"🚀 Processing OID: {oid}")
+
+    try:
+        raw_data = json.dumps(communication_data)
+        xelion_metadata = _extract_agent_info(comm_obj)
+        call_datetime = comm_obj.get('date', 'Unknown')
+        
+        audio_file_path = download_audio(oid)
+        if not audio_file_path:
+            log_with_timestamp(f"🔄 OID {oid} has no audio yet, will retry")
+            return None
+
+        transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
+        
+        try:
+            os.remove(audio_file_path)
+            log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
+        except Exception as e:
+            log_error(f"Error deleting audio file", e)
+
+        if not transcription_result:
+            processing_stats['total_errors'] += 1
+            return None
+
+        wasteking_analysis = analyze_transcription_with_wasteking_criteria(transcription_result['transcription_text'], oid)
+        if not wasteking_analysis:
+            # Fallback scores for Waste King criteria
+            wasteking_analysis = {
+                "call_handling_telephone_manner": 0, "customer_needs_assessment": 0, "product_knowledge_information": 0,
+                "objection_handling_erica": 0, "sales_closing": 0, "compliance_procedures": 0,
+                "professional_telephone_manner": 0, "listening_customer_requirements": 0, "presenting_appropriate_solutions": 0,
+                "postcode_gathering": 0, "waste_type_identification": 0, "prohibited_items_check": 0,
+                "access_assessment": 0, "permit_requirements": 0, "offering_options": 0,
+                "erica_objection_method": 0, "sales_recommendation": 0, "asking_for_sale": 0,
+                "following_procedures": 0, "communication_guidelines": 0, "overall_waste_king_score": 0,
+                "summary": "Waste King analysis failed"
+            }
+
+        call_category = categorize_call(transcription_result['transcription_text'])
+        
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute('''
+                    INSERT INTO calls (
+                        oid, call_datetime, agent_name, phone_number, call_direction, 
+                        duration_seconds, status, user_id, transcription_text, 
+                        transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
+                        word_count, confidence, language, processed_at, category,
+                        call_handling_telephone_manner, customer_needs_assessment, product_knowledge_information,
+                        objection_handling_erica, sales_closing, compliance_procedures,
+                        professional_telephone_manner, listening_customer_requirements, presenting_appropriate_solutions,
+                        postcode_gathering, waste_type_identification, prohibited_items_check,
+                        access_assessment, permit_requirements, offering_options,
+                        erica_objection_method, sales_recommendation, asking_for_sale,
+                        following_procedures, communication_guidelines, overall_waste_king_score,
+                        raw_communication_data, summary_translation
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                    xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
+                    xelion_metadata['user_id'], transcription_result['transcription_text'],
+                    transcription_result['transcribed_duration_minutes'], transcription_result['deepgram_cost_usd'],
+                    transcription_result['deepgram_cost_gbp'], transcription_result['word_count'],
+                    transcription_result['confidence'], transcription_result['language'], datetime.now().isoformat(),
+                    call_category, wasteking_analysis.get('call_handling_telephone_manner', 0),
+                    wasteking_analysis.get('customer_needs_assessment', 0), wasteking_analysis.get('product_knowledge_information', 0),
+                    wasteking_analysis.get('objection_handling_erica', 0), wasteking_analysis.get('sales_closing', 0),
+                    wasteking_analysis.get('compliance_procedures', 0), wasteking_analysis.get('professional_telephone_manner', 0),
+                    wasteking_analysis.get('listening_customer_requirements', 0), wasteking_analysis.get('presenting_appropriate_solutions', 0),
+                    wasteking_analysis.get('postcode_gathering', 0), wasteking_analysis.get('waste_type_identification', 0),
+                    wasteking_analysis.get('prohibited_items_check', 0), wasteking_analysis.get('access_assessment', 0),
+                    wasteking_analysis.get('permit_requirements', 0), wasteking_analysis.get('offering_options', 0),
+                    wasteking_analysis.get('erica_objection_method', 0), wasteking_analysis.get('sales_recommendation', 0),
+                    wasteking_analysis.get('asking_for_sale', 0), wasteking_analysis.get('following_procedures', 0),
+                    wasteking_analysis.get('communication_guidelines', 0), wasteking_analysis.get('overall_waste_king_score', 0),
+                    raw_data, wasteking_analysis.get('summary', 'No summary')
+                ))
+                conn.commit()
+                log_with_timestamp(f"✅ Successfully stored OID {oid} with Waste King analysis")
+                processing_stats['total_processed'] += 1
+                return oid
+            except Exception as e:
+                log_error(f"Database error storing OID {oid}", e)
+                processing_stats['total_errors'] += 1
+                return None
+            finally:
+                conn.close()
+                
+    except Exception as e:
+        log_error(f"Unexpected error processing OID {oid}", e)
+        processing_stats['total_errors'] += 1
+        return None
+
+def fetch_and_transcribe_recent_calls():
+    """Continuous loop checking for new calls <60 mins old with audio"""
+    global background_process_running
+    background_process_running = True
+    
+    while background_process_running:
+        try:
+            time_window_start = datetime.now() - timedelta(minutes=60)
+            log_with_timestamp(f"🔄 Polling for calls since {time_window_start}")
+            
+            if not session_token and not xelion_login():
+                time.sleep(60)
+                continue
+
+            all_comms = fetch_all_communications_from_start_time(
+                until_date=datetime.now(),
+                start_time=time_window_start
+            )
+            
+            if not all_comms:
+                time.sleep(60)
+                continue
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = []
+                for comm in all_comms:
+                    futures.append(executor.submit(process_single_call, comm))
+                
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        log_error("Error in processing thread", e)
+
+            time.sleep(60)
+            
+        except Exception as e:
+            log_error("Monitoring loop error", e)
+            time.sleep(60)
+
 # --- OpenAI Analysis (UPDATED WITH WASTE KING CRITERIA) ---
 def analyze_transcription_with_wasteking_criteria(transcript: str, oid: str = "unknown") -> Optional[Dict]:
     """Analyze transcription with WASTE KING SPECIFIC criteria from induction manual"""
@@ -896,7 +1400,16 @@ init_db()
 # --- Flask Routes ---
 @app.route('/')
 def index():
-    """Serve updated dashboard"""
+    """Auto-start monitoring and serve updated dashboard"""
+    global background_process_running, background_thread
+    
+    if not background_process_running:
+        log_with_timestamp("🚀 AUTO-STARTING Waste King monitoring")
+        background_thread = threading.Thread(target=fetch_and_transcribe_recent_calls)
+        background_thread.daemon = True
+        background_thread.start()
+        log_with_timestamp("✅ Waste King monitoring auto-started")
+    
     return render_template('index.html')
 
 @app.route('/status')
@@ -1355,6 +1868,11 @@ def get_dashboard_data():
         })
 
 if __name__ == '__main__':
+    # Disable Flask logging to reduce noise
+    import logging
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    
     log_with_timestamp("🚀 Starting Waste King System with Proper Evaluation Criteria...")
     log_with_timestamp("✅ Features:")
     log_with_timestamp("  • Waste King specific evaluation criteria from induction manual")
@@ -1366,4 +1884,5 @@ if __name__ == '__main__':
     log_with_timestamp("  • Simplified webhook logging (no sensitive data)")
     
     port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    # Disable debug and verbose logging
+    app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False)
