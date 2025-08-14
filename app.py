@@ -1444,6 +1444,13 @@ def index():
     
     return render_template('index.html')
 
+
+@app.route('/demo')
+def chatbot_demo():
+    """Serve the chatbot demo page"""
+    return render_template('demo.html')
+
+
 @app.route('/status')
 def get_status():
     """Get system status"""
