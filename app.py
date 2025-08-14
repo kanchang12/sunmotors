@@ -1444,6 +1444,9 @@ def index():
     
     return render_template('index.html')
 
+@app.route('/waste-king-chatbot.js')
+def serve_chatbot():
+    return send_file('waste-king-chatbot.js', mimetype='application/javascript')
 
 @app.route('/demo')
 def chatbot_demo():
