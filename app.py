@@ -783,6 +783,131 @@ def process_single_call(communication_data: Dict) -> Optional[str]:
         processing_stats['total_errors'] += 1
         return None
 
+# --- WasteKing API Helper Functions ---
+def create_wasteking_booking():
+    """Create a new booking reference with WasteKing API"""
+    try:
+        headers = {
+            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+            "Content-Type": "application/json"
+        }
+        
+        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
+        response = requests.post(
+            create_url,
+            headers=headers,
+            json={"type": "chatbot", "source": "wasteking.co.uk"},
+            timeout=15,
+            verify=False
+        )
+        
+        if response.status_code == 200:
+            booking_ref = response.json().get('bookingRef')
+            log_with_timestamp(f"✅ Created WasteKing booking reference: {booking_ref}")
+            return booking_ref
+        else:
+            log_with_timestamp(f"❌ Failed to create booking. Status: {response.status_code}, Response: {response.text}")
+            return None
+            
+    except Exception as e:
+        log_error("Failed to create WasteKing booking", e)
+        return None
+
+def update_wasteking_booking(booking_ref: str, update_data: dict):
+    """Update a WasteKing booking with new data"""
+    try:
+        if not booking_ref:
+            log_with_timestamp("❌ No booking reference provided")
+            return None
+            
+        headers = {
+            "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {"bookingRef": booking_ref}
+        payload.update(update_data)
+        
+        update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
+        response = requests.post(
+            update_url,
+            headers=headers,
+            json=payload,
+            timeout=20,
+            verify=False
+        )
+        
+        if response.status_code == 200:
+            log_with_timestamp(f"✅ Updated booking {booking_ref} with: {json.dumps(update_data, indent=2)}")
+            return response.json()
+        else:
+            log_with_timestamp(f"❌ Failed to update booking {booking_ref}. Status: {response.status_code}, Response: {response.text}")
+            return None
+            
+    except Exception as e:
+        log_error(f"Failed to update booking {booking_ref}", e)
+        return None
+
+def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: str):
+    """Send payment SMS via Twilio"""
+    try:
+        # Clean and format phone number
+        if phone.startswith('0'):
+            phone = f"+44{phone[1:]}"
+        elif phone.startswith('44'):
+            phone = f"+{phone}"
+        elif not phone.startswith('+'):
+            phone = f"+44{phone}"
+            
+        if not re.match(r'^\+44\d{9,10}$', phone):
+            log_with_timestamp(f"❌ Invalid UK phone number format: {phone}")
+            return {"success": False, "message": "Invalid UK phone number format"}
+        
+        # Create SMS message
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message_body = f"""Waste King Payment
+Amount: £{amount}
+Reference: {booking_ref}
+
+Pay securely: {payment_link}
+
+After payment, you'll get confirmation.
+Thank you!"""
+        
+        # Send SMS
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone
+        )
+        
+        log_with_timestamp(f"✅ SMS sent to {phone} for booking {booking_ref}. SID: {message.sid}")
+        
+        # Store in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments 
+                (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                booking_ref,
+                phone,
+                float(amount.replace('£', '')),
+                message.sid,
+                datetime.now().isoformat(),
+                payment_link
+            ))
+            conn.commit()
+            conn.close()
+        
+        return {"success": True, "message": "SMS sent successfully", "sms_sid": message.sid}
+        
+    except Exception as e:
+        log_error("Failed to send payment SMS", e)
+        return {"success": False, "message": str(e)}
+
 def fetch_and_transcribe_recent_calls():
     """Continuous loop checking for new calls <60 mins old with audio"""
     global background_process_running
