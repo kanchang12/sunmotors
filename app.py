@@ -1867,6 +1867,312 @@ def get_dashboard_data():
             "processing_stats": processing_stats
         })
 
+# Add these missing Flask routes to your app.py file
+
+# Fix 1: Add the missing /get_calls_list route
+@app.route('/get_calls_list')
+def get_calls_list():
+    """Get paginated calls list with filtering"""
+    try:
+        # Get query parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 50))
+        agent = request.args.get('agent', '')
+        category = request.args.get('category', '')
+        audio_filter = request.args.get('audio_filter', '')
+        
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Build WHERE clause
+        where_conditions = []
+        params = []
+        
+        if agent:
+            where_conditions.append("agent_name LIKE ?")
+            params.append(f"%{agent}%")
+        
+        if category:
+            where_conditions.append("category = ?")
+            params.append(category)
+        
+        if audio_filter == 'with_audio':
+            where_conditions.append("transcription_text IS NOT NULL AND transcription_text != ''")
+        elif audio_filter == 'no_audio':
+            where_conditions.append("(transcription_text IS NULL OR transcription_text = '')")
+        
+        where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
+        
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get total count
+            count_query = f"SELECT COUNT(*) FROM calls {where_clause}"
+            cursor.execute(count_query, params)
+            total_calls = cursor.fetchone()[0]
+            
+            # Get paginated results
+            query = f"""
+                SELECT oid, call_datetime, agent_name, phone_number, call_direction, 
+                       duration_seconds, status, category, transcription_text,
+                       transcribed_duration_minutes, word_count, confidence,
+                       overall_waste_king_score, processed_at
+                FROM calls {where_clause}
+                ORDER BY call_datetime DESC
+                LIMIT ? OFFSET ?
+            """
+            cursor.execute(query, params + [per_page, offset])
+            calls = cursor.fetchall()
+            
+            conn.close()
+        
+        # Convert to list of dicts
+        calls_list = []
+        for call in calls:
+            calls_list.append({
+                'oid': call[0],
+                'call_datetime': call[1],
+                'agent_name': call[2],
+                'phone_number': call[3],
+                'call_direction': call[4],
+                'duration_seconds': call[5],
+                'status': call[6],
+                'category': call[7],
+                'has_transcription': bool(call[8]),
+                'transcribed_duration_minutes': call[9],
+                'word_count': call[10] or 0,
+                'confidence': call[11] or 0,
+                'overall_waste_king_score': call[12] or 0,
+                'processed_at': call[13]
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_calls + per_page - 1) // per_page
+        
+        return jsonify({
+            'calls': calls_list,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total_calls': total_calls,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            }
+        })
+        
+    except Exception as e:
+        log_error("Error in get_calls_list", e)
+        return jsonify({'error': str(e)}), 500
+
+# Fix 2: Add route to get individual call details
+@app.route('/get_call_details/<oid>')
+def get_call_details(oid):
+    """Get detailed call information"""
+    try:
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM calls WHERE oid = ?", (oid,))
+            call = cursor.fetchone()
+            conn.close()
+        
+        if not call:
+            return jsonify({'error': 'Call not found'}), 404
+        
+        # Convert to dict with all Waste King criteria
+        call_details = {
+            'oid': call[0],
+            'call_datetime': call[1],
+            'agent_name': call[2],
+            'phone_number': call[3],
+            'call_direction': call[4],
+            'duration_seconds': call[5],
+            'status': call[6],
+            'user_id': call[7],
+            'transcription_text': call[8],
+            'transcribed_duration_minutes': call[9],
+            'deepgram_cost_usd': call[10],
+            'deepgram_cost_gbp': call[11],
+            'word_count': call[12],
+            'confidence': call[13],
+            'language': call[14],
+            'waste_king_scores': {
+                'call_handling_telephone_manner': call[15],
+                'customer_needs_assessment': call[16],
+                'product_knowledge_information': call[17],
+                'objection_handling_erica': call[18],
+                'sales_closing': call[19],
+                'compliance_procedures': call[20],
+                'professional_telephone_manner': call[21],
+                'listening_customer_requirements': call[22],
+                'presenting_appropriate_solutions': call[23],
+                'postcode_gathering': call[24],
+                'waste_type_identification': call[25],
+                'prohibited_items_check': call[26],
+                'access_assessment': call[27],
+                'permit_requirements': call[28],
+                'offering_options': call[29],
+                'erica_objection_method': call[30],
+                'sales_recommendation': call[31],
+                'asking_for_sale': call[32],
+                'following_procedures': call[33],
+                'communication_guidelines': call[34],
+                'overall_waste_king_score': call[39]
+            },
+            'category': call[35],
+            'processed_at': call[36],
+            'processing_error': call[37],
+            'raw_communication_data': call[38],
+            'summary_translation': call[40]
+        }
+        
+        return jsonify(call_details)
+        
+    except Exception as e:
+        log_error(f"Error getting call details for {oid}", e)
+        return jsonify({'error': str(e)}), 500
+
+# Fix 3: Replace the broken process_single_call function
+def process_single_call(communication_data: Dict) -> Optional[str]:
+    """Process single call with Waste King criteria - FIXED SQL"""
+    comm_obj = communication_data.get('object', {})
+    oid = comm_obj.get('oid')
+    
+    if not oid:
+        processing_stats['total_skipped'] += 1
+        return None
+
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT oid FROM calls WHERE oid = ?", (oid,))
+        if cursor.fetchone():
+            conn.close()
+            log_with_timestamp(f"⏭️ OID {oid} already in database, skipping")
+            processing_stats['total_skipped'] += 1
+            return None
+        conn.close()
+
+    call_datetime = comm_obj.get('date')
+    if not call_datetime:
+        processing_stats['total_skipped'] += 1
+        return None
+        
+    try:
+        if 'T' in call_datetime:
+            call_dt = datetime.fromisoformat(call_datetime.replace('Z', '+00:00'))
+        else:
+            call_dt = datetime.strptime(call_datetime, '%Y-%m-%d %H:%M:%S')
+            
+        if (datetime.now() - call_dt) > timedelta(minutes=60):
+            log_with_timestamp(f"⏭️ OID {oid} is older than 60 mins, skipping")
+            processing_stats['total_skipped'] += 1
+            return None
+    except Exception as e:
+        log_error(f"Error parsing datetime for OID {oid}", e)
+        processing_stats['total_skipped'] += 1
+        return None
+
+    log_with_timestamp(f"🚀 Processing OID: {oid}")
+
+    try:
+        raw_data = json.dumps(communication_data)
+        xelion_metadata = _extract_agent_info(comm_obj)
+        call_datetime = comm_obj.get('date', 'Unknown')
+        
+        audio_file_path = download_audio(oid)
+        if not audio_file_path:
+            log_with_timestamp(f"🔄 OID {oid} has no audio yet, will retry")
+            return None
+
+        transcription_result = transcribe_audio_deepgram(audio_file_path, {'oid': oid})
+        
+        try:
+            os.remove(audio_file_path)
+            log_with_timestamp(f"🗑️ Deleted audio file: {audio_file_path}")
+        except Exception as e:
+            log_error(f"Error deleting audio file", e)
+
+        if not transcription_result:
+            processing_stats['total_errors'] += 1
+            return None
+
+        wasteking_analysis = analyze_transcription_with_wasteking_criteria(transcription_result['transcription_text'], oid)
+        if not wasteking_analysis:
+            # Fallback scores for Waste King criteria
+            wasteking_analysis = {
+                "call_handling_telephone_manner": 0, "customer_needs_assessment": 0, "product_knowledge_information": 0,
+                "objection_handling_erica": 0, "sales_closing": 0, "compliance_procedures": 0,
+                "professional_telephone_manner": 0, "listening_customer_requirements": 0, "presenting_appropriate_solutions": 0,
+                "postcode_gathering": 0, "waste_type_identification": 0, "prohibited_items_check": 0,
+                "access_assessment": 0, "permit_requirements": 0, "offering_options": 0,
+                "erica_objection_method": 0, "sales_recommendation": 0, "asking_for_sale": 0,
+                "following_procedures": 0, "communication_guidelines": 0, "overall_waste_king_score": 0,
+                "summary": "Waste King analysis failed"
+            }
+
+        call_category = categorize_call(transcription_result['transcription_text'])
+        
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                # FIXED: Added processing_error column and proper value count
+                cursor.execute('''
+                    INSERT INTO calls (
+                        oid, call_datetime, agent_name, phone_number, call_direction, 
+                        duration_seconds, status, user_id, transcription_text, 
+                        transcribed_duration_minutes, deepgram_cost_usd, deepgram_cost_gbp, 
+                        word_count, confidence, language, 
+                        call_handling_telephone_manner, customer_needs_assessment, product_knowledge_information,
+                        objection_handling_erica, sales_closing, compliance_procedures,
+                        professional_telephone_manner, listening_customer_requirements, presenting_appropriate_solutions,
+                        postcode_gathering, waste_type_identification, prohibited_items_check,
+                        access_assessment, permit_requirements, offering_options,
+                        erica_objection_method, sales_recommendation, asking_for_sale,
+                        following_procedures, communication_guidelines,
+                        category, processed_at, processing_error, raw_communication_data, 
+                        summary_translation, overall_waste_king_score
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    oid, call_datetime, xelion_metadata['agent_name'], xelion_metadata['phone_number'],
+                    xelion_metadata['call_direction'], xelion_metadata['duration_seconds'], xelion_metadata['status'],
+                    xelion_metadata['user_id'], transcription_result['transcription_text'],
+                    transcription_result['transcribed_duration_minutes'], transcription_result['deepgram_cost_usd'],
+                    transcription_result['deepgram_cost_gbp'], transcription_result['word_count'],
+                    transcription_result['confidence'], transcription_result['language'],
+                    wasteking_analysis.get('call_handling_telephone_manner', 0),
+                    wasteking_analysis.get('customer_needs_assessment', 0), wasteking_analysis.get('product_knowledge_information', 0),
+                    wasteking_analysis.get('objection_handling_erica', 0), wasteking_analysis.get('sales_closing', 0),
+                    wasteking_analysis.get('compliance_procedures', 0), wasteking_analysis.get('professional_telephone_manner', 0),
+                    wasteking_analysis.get('listening_customer_requirements', 0), wasteking_analysis.get('presenting_appropriate_solutions', 0),
+                    wasteking_analysis.get('postcode_gathering', 0), wasteking_analysis.get('waste_type_identification', 0),
+                    wasteking_analysis.get('prohibited_items_check', 0), wasteking_analysis.get('access_assessment', 0),
+                    wasteking_analysis.get('permit_requirements', 0), wasteking_analysis.get('offering_options', 0),
+                    wasteking_analysis.get('erica_objection_method', 0), wasteking_analysis.get('sales_recommendation', 0),
+                    wasteking_analysis.get('asking_for_sale', 0), wasteking_analysis.get('following_procedures', 0),
+                    wasteking_analysis.get('communication_guidelines', 0),
+                    call_category, datetime.now().isoformat(), None, raw_data, 
+                    wasteking_analysis.get('summary', 'No summary'), wasteking_analysis.get('overall_waste_king_score', 0)
+                ))
+                conn.commit()
+                log_with_timestamp(f"✅ Successfully stored OID {oid} with Waste King analysis")
+                processing_stats['total_processed'] += 1
+                return oid
+            except Exception as e:
+                log_error(f"Database error storing OID {oid}", e)
+                processing_stats['total_errors'] += 1
+                return None
+            finally:
+                conn.close()
+                
+    except Exception as e:
+        log_error(f"Unexpected error processing OID {oid}", e)
+        processing_stats['total_errors'] += 1
+        return None
+
 if __name__ == '__main__':
     # Disable Flask logging to reduce noise
     import logging
