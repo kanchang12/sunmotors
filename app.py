@@ -1673,7 +1673,12 @@ def send_payment_sms():
         elif phone.startswith('44'):
             phone = f"+{phone}"
         
-         if not re.match(r'^\+44\d{9,10}$', phone):
+        if not re.match(r'^\+44\d{9,10}$', phone):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid UK phone number format",
+                "example": "+447700900123"
+            }), 400
 
 # --- Dashboard Data with Waste King Criteria ---
 @app.route('/get_dashboard_data')
