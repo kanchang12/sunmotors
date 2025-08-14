@@ -1207,37 +1207,31 @@ def get_wasteking_prices_from_api():
             "timestamp": datetime.now().isoformat()
         }), 200
 
-# --- TOOL 2: NEW Booking Process (Following Your Images) ---
+# --- TOOL 2A: Get Quote Only (No Payment Link) ---
 @app.route('/api/wasteking-quote', methods=['POST'])
-def wasteking_booking_workflow():
-    """NEW booking tool - follows exact image workflow"""
+def wasteking_get_quote():
+    """Get quote ONLY - no booking, no payment link"""
     log_with_timestamp("="*60)
-    log_with_timestamp("🎯 NEW BOOKING WORKFLOW FROM IMAGES")
+    log_with_timestamp("🎯 QUOTE ONLY - NO BOOKING")
     log_with_timestamp("="*60)
     
     try:
-        # Step 1: Get and validate input data
         data = request.get_json()
         log_with_timestamp(f"📥 Received data: {data}")
         
         if not data:
-            log_error("No JSON data provided")
             return jsonify({"success": False, "message": "No data provided"}), 400
-        
-        # STEP 1: Must have postcode, service, and type (from Image 1)
+
+        # STEP 1: Must have postcode, service, and type
         postcode = data.get('postcode')
         service = data.get('service') 
         skip_type = data.get('type')
         
-        log_with_timestamp(f"📋 Required fields - Postcode: {postcode}, Service: {service}, Type: {skip_type}")
-        
         if not all([postcode, service, skip_type]):
-            missing = [k for k in ['postcode', 'service', 'type'] if not data.get(k)]
-            log_error(f"Missing required fields: {missing}")
             return jsonify({
                 "success": False,
                 "message": "Must have postcode, service, and type to proceed",
-                "missing": missing
+                "missing": [k for k in ['postcode', 'service', 'type'] if not data.get(k)]
             }), 400
         
         # Headers exactly as shown in images
@@ -1246,71 +1240,25 @@ def wasteking_booking_workflow():
             "Content-Type": "application/json"
         }
         
-        log_with_timestamp(f"🔧 Using base URL: {WASTEKING_BASE_URL}")
-        log_with_timestamp(f"🔧 Using access token: {WASTEKING_ACCESS_TOKEN[:20]}...")
-        
         # Create booking reference first
         create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
-        log_with_timestamp(f"📞 Making request to: {create_url}")
-        
-        create_payload = {
+        create_response = requests.post(create_url, headers=headers, json={
             "type": "chatbot", 
             "source": "wasteking.co.uk"
-        }
-        log_with_timestamp(f"📤 Create payload: {create_payload}")
-        
-        try:
-            create_response = requests.post(
-                create_url, 
-                headers=headers, 
-                json=create_payload,
-                timeout=15, 
-                verify=False
-            )
-            log_with_timestamp(f"📞 Create response status: {create_response.status_code}")
-            log_with_timestamp(f"📞 Create response text: {create_response.text}")
-        except requests.exceptions.RequestException as req_error:
-            log_error(f"Request to create booking failed", req_error)
-            return jsonify({
-                "success": False,
-                "message": "Failed to connect to booking service",
-                "error": str(req_error)
-            }), 500
+        }, timeout=15, verify=False)
         
         if create_response.status_code != 200:
-            log_error(f"Create booking failed: {create_response.status_code} - {create_response.text}")
             return jsonify({
                 "success": False,
-                "message": "Failed to create booking",
-                "status_code": create_response.status_code,
-                "response": create_response.text
+                "message": "Unable to get quote at this time"
             }), 500
         
-        try:
-            create_data = create_response.json()
-            log_with_timestamp(f"📋 Create response data: {create_data}")
-        except ValueError as json_error:
-            log_error(f"Failed to parse create response JSON", json_error)
-            return jsonify({
-                "success": False,
-                "message": "Invalid response from booking service",
-                "response_text": create_response.text
-            }), 500
-        
-        booking_ref = create_data.get('bookingRef')
+        booking_ref = create_response.json().get('bookingRef')
         if not booking_ref:
-            log_error("No booking reference in response")
-            return jsonify({
-                "success": False,
-                "message": "No booking reference received",
-                "response_data": create_data
-            }), 500
+            return jsonify({"success": False, "message": "No booking reference"}), 500
         
-        log_with_timestamp(f"✅ Created booking reference: {booking_ref}")
-        
-        # STEP 1: Search with postcode, service, type (EXACTLY from Image 1)
+        # Search with postcode, service, type
         update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
-        
         step1_payload = {
             "bookingRef": booking_ref,
             "search": {
@@ -1320,43 +1268,146 @@ def wasteking_booking_workflow():
             }
         }
         
-        log_with_timestamp(f"🔍 Step 1 payload: {step1_payload}")
-        
-        try:
-            step1_response = requests.post(
-                update_url, 
-                headers=headers, 
-                json=step1_payload, 
-                timeout=20, 
-                verify=False
-            )
-            log_with_timestamp(f"🔍 Step 1 response status: {step1_response.status_code}")
-            log_with_timestamp(f"🔍 Step 1 response text: {step1_response.text}")
-        except requests.exceptions.RequestException as req_error:
-            log_error(f"Step 1 request failed", req_error)
-            return jsonify({
-                "success": False,
-                "message": "Failed to search for service",
-                "booking_ref": booking_ref,
-                "error": str(req_error)
-            }), 500
+        step1_response = requests.post(update_url, headers=headers, json=step1_payload, timeout=20, verify=False)
         
         if step1_response.status_code != 200:
-            log_with_timestamp(f"❌ Step 1 failed: {step1_response.status_code}")
             return jsonify({
                 "success": False,
-                "message": f"Service not available in {postcode}",
-                "booking_ref": booking_ref,
-                "status_code": step1_response.status_code,
-                "response": step1_response.text
-            }), 200  # Return 200 but with success: false
+                "message": f"Service not available in {postcode}"
+            })
         
-        log_with_timestamp("✅ Step 1 complete: Service available")
+        # Get quote (NO ACTION = NO PAYMENT LINK)
+        quote_payload = {
+            "bookingRef": booking_ref
+            # NO "action": "quote" - this prevents payment link creation
+        }
         
-        # STEP 2: Add customer details if provided (EXACTLY from Image 2)
-        if data.get('firstName') and data.get('lastName'):
-            log_with_timestamp("👤 Step 2: Adding customer details...")
+        quote_response = requests.post(update_url, headers=headers, json=quote_payload, timeout=15, verify=False)
+        
+        if quote_response.status_code == 200:
+            quote_data = quote_response.json()
             
+            # Extract quote info (no payment link expected)
+            quote_info = quote_data.get('quote', {})
+            service_price = quote_info.get('servicePrice', '0.00')
+            supplements_price = quote_info.get('supplementsPrice', '0.00') 
+            total_price = quote_info.get('price', '0.00')
+            
+            # Store quote WITHOUT payment link
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO price_quotes 
+                    (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    booking_ref, booking_ref, postcode, service, json.dumps(quote_data),
+                    datetime.now().isoformat(), data.get('agent_name', 'Thomas'), 'quoted_only',
+                    data.get('call_sid', 'Unknown'), data.get('elevenlabs_conversation_id', 'Unknown')
+                ))
+                conn.commit()
+                conn.close()
+            
+            return jsonify({
+                "success": True,
+                "booking_ref": booking_ref,
+                "quote": {
+                    "servicePrice": service_price,
+                    "supplementsPrice": supplements_price,
+                    "price": total_price
+                },
+                "message": f"Quote for {skip_type} {service}: £{total_price}. Reference: {booking_ref}. Would you like to proceed with booking?"
+            })
+        
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Quote generation failed"
+            })
+    
+    except Exception as e:
+        log_error("Quote generation failed", e)
+        return jsonify({
+            "success": False,
+            "message": "System error"
+        }), 500
+
+
+# --- TOOL 2B: Confirm Booking with Payment Link ---
+@app.route('/api/wasteking-booking', methods=['POST'])
+def wasteking_confirm_booking():
+    """Confirm booking and create payment link"""
+    log_with_timestamp("="*60)
+    log_with_timestamp("🎯 CONFIRM BOOKING + PAYMENT LINK")
+    log_with_timestamp("="*60)
+    
+    try:
+        data = request.get_json()
+        log_with_timestamp(f"📥 Received data: {data}")
+        
+        if not data:
+            return jsonify({"success": False, "message": "No data provided"}), 400
+
+        # Can use existing booking_ref OR create new one
+        booking_ref = data.get('booking_ref')
+        
+        if not booking_ref:
+            # Create new booking if no existing ref
+            postcode = data.get('postcode')
+            service = data.get('service') 
+            skip_type = data.get('type')
+            
+            if not all([postcode, service, skip_type]):
+                return jsonify({
+                    "success": False,
+                    "message": "Must have booking_ref OR (postcode, service, type)"
+                }), 400
+                
+            # Same initial steps as quote endpoint...
+            headers = {
+                "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+                "Content-Type": "application/json"
+            }
+            
+            create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
+            create_response = requests.post(create_url, headers=headers, json={
+                "type": "chatbot", 
+                "source": "wasteking.co.uk"
+            }, timeout=15, verify=False)
+            
+            if create_response.status_code != 200:
+                return jsonify({"success": False, "message": "Failed to create booking"}), 500
+            
+            booking_ref = create_response.json().get('bookingRef')
+            if not booking_ref:
+                return jsonify({"success": False, "message": "No booking reference"}), 500
+            
+            # Search step
+            update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
+            step1_payload = {
+                "bookingRef": booking_ref,
+                "search": {
+                    "postCode": postcode,
+                    "service": service,
+                    "type": skip_type
+                }
+            }
+            
+            step1_response = requests.post(update_url, headers=headers, json=step1_payload, timeout=20, verify=False)
+            if step1_response.status_code != 200:
+                return jsonify({"success": False, "message": f"Service not available in {postcode}"}), 500
+        
+        else:
+            # Use existing booking_ref
+            headers = {
+                "x-wasteking-request": WASTEKING_ACCESS_TOKEN,
+                "Content-Type": "application/json"
+            }
+            update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
+        
+        # Add customer details if provided
+        if data.get('firstName') and data.get('lastName'):
             step2_payload = {
                 "bookingRef": booking_ref,
                 "customer": {
@@ -1368,31 +1419,14 @@ def wasteking_booking_workflow():
                     "address2": data.get('address2', ''),
                     "addressCity": data.get('addressCity', ''),
                     "addressCounty": data.get('addressCounty', ''),
-                    "addressPostcode": data.get('addressPostcode', postcode)
+                    "addressPostcode": data.get('addressPostcode', data.get('postcode', ''))
                 }
             }
             
-            log_with_timestamp(f"👤 Step 2 payload: {step2_payload}")
-            
-            try:
-                step2_response = requests.post(
-                    update_url, 
-                    headers=headers, 
-                    json=step2_payload, 
-                    timeout=15, 
-                    verify=False
-                )
-                log_with_timestamp(f"👤 Step 2 response: {step2_response.status_code}")
-            except requests.exceptions.RequestException as req_error:
-                log_error(f"Step 2 request failed", req_error)
-                # Continue anyway - customer details are optional
-            
-            log_with_timestamp("✅ Step 2 complete: Customer details added")
+            step2_response = requests.post(update_url, headers=headers, json=step2_payload, timeout=15, verify=False)
         
-        # STEP 3: Add service details if provided (EXACTLY from Image 3)
+        # Add service details if provided
         if data.get('date') and data.get('time'):
-            log_with_timestamp("📅 Step 3: Adding service details...")
-            
             step3_payload = {
                 "bookingRef": booking_ref,
                 "service": {
@@ -1404,80 +1438,34 @@ def wasteking_booking_workflow():
                 }
             }
             
-            # Add supplements exactly as shown in images
+            # Add supplements if provided
             if data.get('supplement_code'):
                 step3_payload["service"]["supplements"] = [{
                     "code": data.get('supplement_code'),
                     "qty": int(data.get('supplement_qty', 1))
                 }]
             
-            # Add images exactly as shown
+            # Add images if provided
             if data.get('imageUrl'):
                 step3_payload["images"] = [{
                     "imageUrl": data.get('imageUrl')
                 }]
             
-            log_with_timestamp(f"📅 Step 3 payload: {step3_payload}")
-            
-            try:
-                step3_response = requests.post(
-                    update_url, 
-                    headers=headers, 
-                    json=step3_payload, 
-                    timeout=15, 
-                    verify=False
-                )
-                log_with_timestamp(f"📅 Step 3 response: {step3_response.status_code}")
-            except requests.exceptions.RequestException as req_error:
-                log_error(f"Step 3 request failed", req_error)
-                # Continue anyway - service details are optional
-            
-            log_with_timestamp("✅ Step 3 complete: Service details added")
+            step3_response = requests.post(update_url, headers=headers, json=step3_payload, timeout=15, verify=False)
         
-        # FINAL STEP: Get quote with action (EXACTLY from Image 3)
-        log_with_timestamp("💰 Final Step: Getting quote...")
-        
+        # FINAL STEP: Create booking with payment link
         quote_payload = {
             "bookingRef": booking_ref,
-            "action": "quote",
+            "action": "quote",  # THIS creates payment link
             "postPaymentUrl": "https://wasteking.co.uk/thank-you/"
         }
         
-        log_with_timestamp(f"💰 Quote payload: {quote_payload}")
-        
-        try:
-            quote_response = requests.post(
-                update_url, 
-                headers=headers, 
-                json=quote_payload, 
-                timeout=15, 
-                verify=False
-            )
-            log_with_timestamp(f"💰 Quote response status: {quote_response.status_code}")
-            log_with_timestamp(f"💰 Quote response text: {quote_response.text}")
-        except requests.exceptions.RequestException as req_error:
-            log_error(f"Quote request failed", req_error)
-            return jsonify({
-                "success": False,
-                "message": "Failed to generate quote",
-                "booking_ref": booking_ref,
-                "error": str(req_error)
-            }), 500
+        quote_response = requests.post(update_url, headers=headers, json=quote_payload, timeout=15, verify=False)
         
         if quote_response.status_code == 200:
-            try:
-                quote_data = quote_response.json()
-                log_with_timestamp(f"💰 Quote data: {quote_data}")
-            except ValueError as json_error:
-                log_error(f"Failed to parse quote response JSON", json_error)
-                return jsonify({
-                    "success": False,
-                    "message": "Invalid quote response",
-                    "booking_ref": booking_ref,
-                    "response_text": quote_response.text
-                }), 500
+            quote_data = quote_response.json()
             
-            # Extract quote exactly as shown in images
+            # Extract quote with payment link
             quote_info = quote_data.get('quote', {})
             service_price = quote_info.get('servicePrice', '0.00')
             supplements_price = quote_info.get('supplementsPrice', '0.00') 
@@ -1485,32 +1473,23 @@ def wasteking_booking_workflow():
             payment_link = quote_info.get('paymentLink', '')
             post_payment_url = quote_info.get('postPaymentUrl', '')
             
-            log_with_timestamp(f"✅ Quote complete: £{total_price}")
-            log_with_timestamp(f"💳 Payment link: {payment_link}")
+            # Store booking WITH payment link
+            with db_lock:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO price_quotes 
+                    (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id, payment_link)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    booking_ref, booking_ref, data.get('postcode', ''), data.get('service', ''), json.dumps(quote_data),
+                    datetime.now().isoformat(), data.get('agent_name', 'Thomas'), 'booked',
+                    data.get('call_sid', 'Unknown'), data.get('elevenlabs_conversation_id', 'Unknown'),
+                    payment_link
+                ))
+                conn.commit()
+                conn.close()
             
-            # Store in database WITH payment link
-            try:
-                with db_lock:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        INSERT INTO price_quotes 
-                        (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id, payment_link)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (
-                        booking_ref, booking_ref, postcode, service, json.dumps(quote_data),
-                        datetime.now().isoformat(), data.get('agent_name', 'Thomas'), 'quoted',
-                        data.get('call_sid', 'Unknown'), data.get('elevenlabs_conversation_id', 'Unknown'),
-                        payment_link
-                    ))
-                    conn.commit()
-                    conn.close()
-                    log_with_timestamp(f"💾 Saved quote to database")
-            except Exception as db_error:
-                log_error(f"Database save failed", db_error)
-                # Continue anyway - at least return the quote
-            
-            # Return exactly what images show
             return jsonify({
                 "success": True,
                 "booking_ref": booking_ref,
@@ -1521,29 +1500,22 @@ def wasteking_booking_workflow():
                     "paymentLink": payment_link,
                     "postPaymentUrl": post_payment_url
                 },
-                "message": f"Quote ready! {skip_type} {service} for £{total_price}. Reference: {booking_ref}"
+                "message": f"Booking confirmed! Reference: {booking_ref}. Total: £{total_price}"
             })
         
         else:
-            log_error(f"Quote generation failed: {quote_response.status_code} - {quote_response.text}")
             return jsonify({
                 "success": False,
-                "message": "Quote generation failed",
-                "booking_ref": booking_ref,
-                "status_code": quote_response.status_code,
-                "response": quote_response.text
+                "message": "Booking confirmation failed"
             }), 500
     
     except Exception as e:
-        log_error("WasteKing booking workflow failed", e)
-        import traceback
-        traceback.print_exc()  # Print full traceback to console
+        log_error("Booking confirmation failed", e)
         return jsonify({
             "success": False,
-            "message": "System error",
-            "error": str(e),
-            "traceback": traceback.format_exc()
+            "message": "System error"
         }), 500
+
 
 # --- TOOL 3: Updated SMS Payment (Uses Dynamic Payment Link) ---
 @app.route('/api/send-payment-sms', methods=['POST'])
