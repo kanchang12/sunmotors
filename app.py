@@ -1673,7 +1673,7 @@ def send_payment_sms():
         elif phone.startswith('44'):
             phone = f"+{phone}"
         
-        if not re.match(r'^\+44\d{9,10}
+         if not re.match(r'^\+44\d{9,10}$', phone):
 
 # --- Dashboard Data with Waste King Criteria ---
 @app.route('/get_dashboard_data')
