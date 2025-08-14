@@ -1216,8 +1216,12 @@ def wasteking_booking_workflow():
     log_with_timestamp("="*60)
     
     try:
+        # Step 1: Get and validate input data
         data = request.get_json()
+        log_with_timestamp(f"📥 Received data: {data}")
+        
         if not data:
+            log_error("No JSON data provided")
             return jsonify({"success": False, "message": "No data provided"}), 400
         
         # STEP 1: Must have postcode, service, and type (from Image 1)
@@ -1225,11 +1229,15 @@ def wasteking_booking_workflow():
         service = data.get('service') 
         skip_type = data.get('type')
         
+        log_with_timestamp(f"📋 Required fields - Postcode: {postcode}, Service: {service}, Type: {skip_type}")
+        
         if not all([postcode, service, skip_type]):
+            missing = [k for k in ['postcode', 'service', 'type'] if not data.get(k)]
+            log_error(f"Missing required fields: {missing}")
             return jsonify({
                 "success": False,
                 "message": "Must have postcode, service, and type to proceed",
-                "missing": [k for k in ['postcode', 'service', 'type'] if not data.get(k)]
+                "missing": missing
             }), 400
         
         # Headers exactly as shown in images
@@ -1238,21 +1246,67 @@ def wasteking_booking_workflow():
             "Content-Type": "application/json"
         }
         
+        log_with_timestamp(f"🔧 Using base URL: {WASTEKING_BASE_URL}")
+        log_with_timestamp(f"🔧 Using access token: {WASTEKING_ACCESS_TOKEN[:20]}...")
+        
         # Create booking reference first
         create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
-        create_response = requests.post(create_url, headers=headers, json={
+        log_with_timestamp(f"📞 Making request to: {create_url}")
+        
+        create_payload = {
             "type": "chatbot", 
             "source": "wasteking.co.uk"
-        }, timeout=15, verify=False)
+        }
+        log_with_timestamp(f"📤 Create payload: {create_payload}")
+        
+        try:
+            create_response = requests.post(
+                create_url, 
+                headers=headers, 
+                json=create_payload,
+                timeout=15, 
+                verify=False
+            )
+            log_with_timestamp(f"📞 Create response status: {create_response.status_code}")
+            log_with_timestamp(f"📞 Create response text: {create_response.text}")
+        except requests.exceptions.RequestException as req_error:
+            log_error(f"Request to create booking failed", req_error)
+            return jsonify({
+                "success": False,
+                "message": "Failed to connect to booking service",
+                "error": str(req_error)
+            }), 500
         
         if create_response.status_code != 200:
-            return jsonify({"success": False, "message": "Failed to create booking"}), 500
+            log_error(f"Create booking failed: {create_response.status_code} - {create_response.text}")
+            return jsonify({
+                "success": False,
+                "message": "Failed to create booking",
+                "status_code": create_response.status_code,
+                "response": create_response.text
+            }), 500
         
-        booking_ref = create_response.json().get('bookingRef')
+        try:
+            create_data = create_response.json()
+            log_with_timestamp(f"📋 Create response data: {create_data}")
+        except ValueError as json_error:
+            log_error(f"Failed to parse create response JSON", json_error)
+            return jsonify({
+                "success": False,
+                "message": "Invalid response from booking service",
+                "response_text": create_response.text
+            }), 500
+        
+        booking_ref = create_data.get('bookingRef')
         if not booking_ref:
-            return jsonify({"success": False, "message": "No booking reference"}), 500
+            log_error("No booking reference in response")
+            return jsonify({
+                "success": False,
+                "message": "No booking reference received",
+                "response_data": create_data
+            }), 500
         
-        log_with_timestamp(f"📋 Created booking reference: {booking_ref}")
+        log_with_timestamp(f"✅ Created booking reference: {booking_ref}")
         
         # STEP 1: Search with postcode, service, type (EXACTLY from Image 1)
         update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
@@ -1266,15 +1320,36 @@ def wasteking_booking_workflow():
             }
         }
         
-        log_with_timestamp("🔍 Step 1: Posting search details...")
-        step1_response = requests.post(update_url, headers=headers, json=step1_payload, timeout=20, verify=False)
+        log_with_timestamp(f"🔍 Step 1 payload: {step1_payload}")
+        
+        try:
+            step1_response = requests.post(
+                update_url, 
+                headers=headers, 
+                json=step1_payload, 
+                timeout=20, 
+                verify=False
+            )
+            log_with_timestamp(f"🔍 Step 1 response status: {step1_response.status_code}")
+            log_with_timestamp(f"🔍 Step 1 response text: {step1_response.text}")
+        except requests.exceptions.RequestException as req_error:
+            log_error(f"Step 1 request failed", req_error)
+            return jsonify({
+                "success": False,
+                "message": "Failed to search for service",
+                "booking_ref": booking_ref,
+                "error": str(req_error)
+            }), 500
         
         if step1_response.status_code != 200:
+            log_with_timestamp(f"❌ Step 1 failed: {step1_response.status_code}")
             return jsonify({
                 "success": False,
                 "message": f"Service not available in {postcode}",
-                "booking_ref": booking_ref
-            })
+                "booking_ref": booking_ref,
+                "status_code": step1_response.status_code,
+                "response": step1_response.text
+            }), 200  # Return 200 but with success: false
         
         log_with_timestamp("✅ Step 1 complete: Service available")
         
@@ -1297,7 +1372,21 @@ def wasteking_booking_workflow():
                 }
             }
             
-            step2_response = requests.post(update_url, headers=headers, json=step2_payload, timeout=15, verify=False)
+            log_with_timestamp(f"👤 Step 2 payload: {step2_payload}")
+            
+            try:
+                step2_response = requests.post(
+                    update_url, 
+                    headers=headers, 
+                    json=step2_payload, 
+                    timeout=15, 
+                    verify=False
+                )
+                log_with_timestamp(f"👤 Step 2 response: {step2_response.status_code}")
+            except requests.exceptions.RequestException as req_error:
+                log_error(f"Step 2 request failed", req_error)
+                # Continue anyway - customer details are optional
+            
             log_with_timestamp("✅ Step 2 complete: Customer details added")
         
         # STEP 3: Add service details if provided (EXACTLY from Image 3)
@@ -1328,7 +1417,21 @@ def wasteking_booking_workflow():
                     "imageUrl": data.get('imageUrl')
                 }]
             
-            step3_response = requests.post(update_url, headers=headers, json=step3_payload, timeout=15, verify=False)
+            log_with_timestamp(f"📅 Step 3 payload: {step3_payload}")
+            
+            try:
+                step3_response = requests.post(
+                    update_url, 
+                    headers=headers, 
+                    json=step3_payload, 
+                    timeout=15, 
+                    verify=False
+                )
+                log_with_timestamp(f"📅 Step 3 response: {step3_response.status_code}")
+            except requests.exceptions.RequestException as req_error:
+                log_error(f"Step 3 request failed", req_error)
+                # Continue anyway - service details are optional
+            
             log_with_timestamp("✅ Step 3 complete: Service details added")
         
         # FINAL STEP: Get quote with action (EXACTLY from Image 3)
@@ -1340,10 +1443,39 @@ def wasteking_booking_workflow():
             "postPaymentUrl": "https://wasteking.co.uk/thank-you/"
         }
         
-        quote_response = requests.post(update_url, headers=headers, json=quote_payload, timeout=15, verify=False)
+        log_with_timestamp(f"💰 Quote payload: {quote_payload}")
+        
+        try:
+            quote_response = requests.post(
+                update_url, 
+                headers=headers, 
+                json=quote_payload, 
+                timeout=15, 
+                verify=False
+            )
+            log_with_timestamp(f"💰 Quote response status: {quote_response.status_code}")
+            log_with_timestamp(f"💰 Quote response text: {quote_response.text}")
+        except requests.exceptions.RequestException as req_error:
+            log_error(f"Quote request failed", req_error)
+            return jsonify({
+                "success": False,
+                "message": "Failed to generate quote",
+                "booking_ref": booking_ref,
+                "error": str(req_error)
+            }), 500
         
         if quote_response.status_code == 200:
-            quote_data = quote_response.json()
+            try:
+                quote_data = quote_response.json()
+                log_with_timestamp(f"💰 Quote data: {quote_data}")
+            except ValueError as json_error:
+                log_error(f"Failed to parse quote response JSON", json_error)
+                return jsonify({
+                    "success": False,
+                    "message": "Invalid quote response",
+                    "booking_ref": booking_ref,
+                    "response_text": quote_response.text
+                }), 500
             
             # Extract quote exactly as shown in images
             quote_info = quote_data.get('quote', {})
@@ -1357,21 +1489,26 @@ def wasteking_booking_workflow():
             log_with_timestamp(f"💳 Payment link: {payment_link}")
             
             # Store in database WITH payment link
-            with db_lock:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO price_quotes 
-                    (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id, payment_link)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    booking_ref, booking_ref, postcode, service, json.dumps(quote_data),
-                    datetime.now().isoformat(), data.get('agent_name', 'Thomas'), 'quoted',
-                    data.get('call_sid', 'Unknown'), data.get('elevenlabs_conversation_id', 'Unknown'),
-                    payment_link
-                ))
-                conn.commit()
-                conn.close()
+            try:
+                with db_lock:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT INTO price_quotes 
+                        (quote_id, booking_ref, postcode, service, price_data, created_at, agent_name, status, call_sid, elevenlabs_conversation_id, payment_link)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        booking_ref, booking_ref, postcode, service, json.dumps(quote_data),
+                        datetime.now().isoformat(), data.get('agent_name', 'Thomas'), 'quoted',
+                        data.get('call_sid', 'Unknown'), data.get('elevenlabs_conversation_id', 'Unknown'),
+                        payment_link
+                    ))
+                    conn.commit()
+                    conn.close()
+                    log_with_timestamp(f"💾 Saved quote to database")
+            except Exception as db_error:
+                log_error(f"Database save failed", db_error)
+                # Continue anyway - at least return the quote
             
             # Return exactly what images show
             return jsonify({
@@ -1388,18 +1525,24 @@ def wasteking_booking_workflow():
             })
         
         else:
+            log_error(f"Quote generation failed: {quote_response.status_code} - {quote_response.text}")
             return jsonify({
                 "success": False,
                 "message": "Quote generation failed",
-                "booking_ref": booking_ref
-            })
+                "booking_ref": booking_ref,
+                "status_code": quote_response.status_code,
+                "response": quote_response.text
+            }), 500
     
     except Exception as e:
         log_error("WasteKing booking workflow failed", e)
+        import traceback
+        traceback.print_exc()  # Print full traceback to console
         return jsonify({
             "success": False,
             "message": "System error",
-            "error": str(e)
+            "error": str(e),
+            "traceback": traceback.format_exc()
         }), 500
 
 # --- TOOL 3: Updated SMS Payment (Uses Dynamic Payment Link) ---
