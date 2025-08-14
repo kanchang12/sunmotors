@@ -4,1483 +4,396 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Waste King Call Analysis Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.0/dist/chart.min.js"></script>
     <style>
-        /* Base Styles */
         body {
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0;
-            background: linear-gradient(135deg, #2c5530 0%, #1a3d1f 100%);
-            color: #333;
-            min-height: 100vh;
-        }
-
-        .main-container {
-            background-color: #f8f9fa;
-            min-height: 100vh;
             padding: 20px;
+            background-color: #f5f5f5;
         }
-
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-            color: #2c5530;
-            background: linear-gradient(90deg, #2c5530, #1a3d1f);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .waste-king-logo {
-            color: #2c5530;
-            font-weight: bold;
-            font-size: 2.5rem;
-        }
-
-        /* Card Styles */
-        .card {
-            background-color: #e9ecef;
-            border: 1px solid #dee2e6;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-            padding: 20px;
-            margin-bottom: 20px;
-            height: 100%;
-            transition: transform 0.2s ease-in-out;
-        }
-
-        .card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
-        }
-
-        .card-title {
-            font-size: 1.5rem;
-            margin-bottom: 15px;
-            color: #2c5530;
-            border-bottom: 2px solid #2c5530;
-            padding-bottom: 10px;
-            font-weight: 600;
-        }
-
-        /* Stats Items */
-        .stats-item {
-            font-size: 1.1rem;
-            margin-bottom: 10px;
-            padding: 8px;
-            background-color: #ffffff;
-            border-radius: 6px;
-            border-left: 4px solid #2c5530;
-        }
-
-        .stats-item strong {
-            color: #1a3d1f;
-        }
-
-        /* Gauges Container Styles */
-        .gauges-container {
-            padding: 20px 0;
-        }
-
-        .gauge-wrapper {
-            background: linear-gradient(145deg, #ffffff, #f0f2f5);
-            border-radius: 16px;
-            padding: 25px 15px 45px 15px;
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
-            transition: all 0.3s ease;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 230px;
-        }
-
-        .gauge-wrapper:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.15);
-        }
-
-        .gauge-container {
-            width: 140px;
-            height: 140px;
+        .container {
+            max-width: 1200px;
             margin: 0 auto;
-            position: relative;
-            margin-bottom: 50px;
         }
-
-        .gauge-label {
-            position: absolute;
-            bottom: -37px;
-            width: 100%;
-            text-align: center;
-            font-weight: bold;
-            color: #2c5530;
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            line-height: 1.2;
-        }
-
-        .gauge-count {
-            display: block;
-            margin-top: 10px;
-            color: #6c757d;
-            font-weight: 500;
-            font-size: 0.85rem;
-        }
-
-        /* Performance Section Styles - Updated for Waste King */
-        .performance-section {
-            padding: 10px 0;
-        }
-
-        .performance-category {
-            margin-bottom: 25px;
-            padding: 20px;
-            background: linear-gradient(145deg, #f8f9fa, #ffffff);
-            border-radius: 12px;
-            border-left: 4px solid #2c5530;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-            transition: all 0.3s ease;
-        }
-
-        .performance-category:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-        }
-
-        .performance-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid #dee2e6;
-        }
-
-        .performance-title {
-            font-weight: 600;
-            color: #2c5530;
-            font-size: 1.1rem;
-            flex-grow: 1;
-        }
-
-        .category-score {
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: #2c5530;
-        }
-
-        .performance-max {
-            color: #6c757d;
-            font-size: 0.9rem;
-            margin-left: 2px;
-        }
-
-        .performance-metrics {
-            display: grid;
-            gap: 8px;
-        }
-
-        .metric-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 12px;
-            background-color: #ffffff;
-            border-radius: 8px;
-            border-left: 3px solid #28a745;
-            transition: all 0.2s ease;
-        }
-
-        .metric-item:hover {
-            background-color: #f8f9fa;
-            transform: translateX(3px);
-        }
-
-        .metric-label {
-            font-size: 0.9rem;
-            color: #495057;
-            font-weight: 500;
-        }
-
-        .metric-score {
-            font-weight: 600;
-            color: #2c5530;
-            font-size: 0.95rem;
-            background: linear-gradient(45deg, #2c5530, #1a3d1f);
-            background-clip: text;
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        /* Table Styles */
-        .calls-section {
-            margin-top: 40px;
-        }
-
-        .calls-table {
-            background-color: #ffffff;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-        }
-
-        .calls-table th {
-            background: linear-gradient(45deg, #2c5530, #1a3d1f);
-            color: white;
-            border: none;
-            padding: 12px;
-            font-weight: 600;
-        }
-
-        .calls-table td {
-            padding: 12px;
-            border-bottom: 1px solid #dee2e6;
-            vertical-align: middle;
-        }
-
-        .calls-table tr:nth-child(even) {
-            background-color: #f8f9fa;
-        }
-
-        .calls-table tr:hover {
-            background-color: #e2e6ea;
-        }
-
-        /* Score Badges */
-        .score-badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-weight: bold;
-            font-size: 0.85rem;
-            min-width: 40px;
-            text-align: center;
-        }
-
-        .score-excellent {
-            background-color: #d4edda;
-            color: #155724;
-        }
-
-        .score-good {
-            background-color: #d1ecf1;
-            color: #0c5460;
-        }
-
-        .score-average {
-            background-color: #fff3cd;
-            color: #856404;
-        }
-
-        .score-poor {
-            background-color: #f8d7da;
-            color: #721c24;
-        }
-
-        /* Status Badges */
-        .status-badge {
-            padding: 4px 8px;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            font-weight: 500;
-        }
-
-        .status-completed {
-            background-color: #d4edda;
-            color: #155724;
-        }
-
-        .status-missed {
-            background-color: #f8d7da;
-            color: #721c24;
-        }
-
-        .status-no-audio {
-            background-color: #e2e3e5;
-            color: #383d41;
-        }
-
-        .agent-name {
-            font-weight: 600;
-            color: #2c5530;
-        }
-
-        .call-summary {
-            max-width: 300px;
-            font-size: 0.9rem;
-            color: #6c757d;
-        }
-
-        /* Summary Button and Popup */
-        .summary-btn {
-            background: linear-gradient(45deg, #2c5530, #1a3d1f);
-            border: none;
-            color: white;
-            padding: 6px 12px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 0.8rem;
-            font-weight: 500;
-            transition: all 0.2s;
-            margin-top: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        .summary-btn:hover {
-            background: linear-gradient(45deg, #1a3d1f, #0d2412);
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-        }
-
-        .summary-popup {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0,0,0,0.5);
-        }
-
-        .summary-popup-content {
-            background-color: #fefefe;
-            margin: 5% auto;
-            padding: 0;
-            border-radius: 12px;
-            width: 90%;
-            max-width: 800px;
-            max-height: 85vh;
-            overflow: hidden;
-            position: relative;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-        }
-
-        .summary-popup-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 20px;
-            background: linear-gradient(45deg, #2c5530, #1a3d1f);
-            color: white;
-        }
-
-        .summary-popup-header h5 {
-            margin: 0;
-            color: white;
-        }
-
-        .summary-popup-close {
-            color: white;
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-            line-height: 1;
-            opacity: 0.8;
-        }
-
-        .summary-popup-close:hover {
-            opacity: 1;
-        }
-
-        .summary-popup-body {
-            padding: 20px;
-            max-height: calc(85vh - 80px);
-            overflow-y: auto;
-        }
-
-        .summary-section {
-            margin-bottom: 25px;
-            padding: 15px;
-            background-color: #f8f9fa;
-            border-radius: 8px;
-            border-left: 4px solid #2c5530;
-        }
-
-        .summary-section h6 {
-            margin: 0 0 10px 0;
-            color: #2c5530;
-            font-weight: 600;
-            font-size: 1.1rem;
-        }
-
-        .summary-text {
-            line-height: 1.6;
-            color: #333;
-            margin: 0;
-        }
-
-        .transcript-section {
-            margin-bottom: 15px;
-            padding: 15px;
-            background-color: #ffffff;
-            border-radius: 8px;
-            border: 1px solid #dee2e6;
-        }
-
-        .transcript-section h6 {
-            margin: 0 0 10px 0;
-            color: #2c5530;
-            font-weight: 600;
-            font-size: 1.1rem;
-        }
-
-        .transcript-text {
-            line-height: 1.6;
-            color: #333;
-            margin: 0;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9rem;
-            white-space: pre-wrap;
-            background-color: #f8f9fa;
-            padding: 10px;
-            border-radius: 4px;
-        }
-
-        .no-transcript {
-            color: #6c757d;
-            font-style: italic;
-        }
-
-        /* Filters and Other Components */
-        .filters-section {
-            background-color: #e9ecef;
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .pagination-container {
-            display: flex;
-            justify-content: center;
-            margin-top: 20px;
-        }
-
-        .loading-spinner {
-            text-align: center;
-            padding: 40px;
-        }
-
-        .auto-status {
-            background: linear-gradient(45deg, #28a745, #20c997);
-            color: white;
-            padding: 15px;
-            border-radius: 12px;
+        h1 {
+            color: #2c3e50;
             text-align: center;
             margin-bottom: 30px;
-            animation: pulse 2s infinite;
         }
-
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.02); }
-            100% { transform: scale(1); }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
         }
-
-        .live-indicator {
-            display: inline-block;
-            width: 12px;
-            height: 12px;
-            background-color: #28a745;
-            border-radius: 50%;
-            animation: blink 1s infinite;
-            margin-right: 8px;
-        }
-
-        @keyframes blink {
-            0%, 50% { opacity: 1; }
-            51%, 100% { opacity: 0.3; }
-        }
-
-        .error-alert {
-            background-color: #f8d7da;
-            color: #721c24;
-            padding: 15px;
+        .stat-card {
+            background: white;
+            padding: 20px;
             border-radius: 8px;
-            margin-bottom: 20px;
-            border: 1px solid #f5c6cb;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
         }
-
-        .success-alert {
-            background-color: #d4edda;
-            color: #155724;
-            padding: 15px;
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            color: #34495e;
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #3498db;
+        }
+        .controls {
+            background: white;
+            padding: 20px;
             border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
-            border: 1px solid #c3e6cb;
         }
-
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .gauge-container {
-                width: 120px;
-                height: 120px;
-            }
-            
-            .gauge-wrapper {
-                padding: 15px;
-                margin-bottom: 15px;
-            }
-            
-            .gauge-label {
-                font-size: 0.8rem;
-                bottom: -35px;
-            }
-            
-            .performance-category {
-                padding: 15px;
-                margin-bottom: 20px;
-            }
-            
-            .performance-title {
-                font-size: 1rem;
-            }
-            
-            .metric-item {
-                padding: 6px 10px;
-            }
-
-            .summary-popup-content {
-                width: 95%;
-                margin: 2% auto;
-                max-height: 95vh;
-            }
-
-            .summary-popup-body {
-                max-height: calc(95vh - 80px);
-            }
+        .controls input, .controls select, .controls button {
+            margin: 5px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
         }
-
-        @media (max-width: 576px) {
-            .gauges-container .col-lg-4,
-            .gauges-container .col-lg-3 {
-                flex: 0 0 50%;
-                max-width: 50%;
-            }
-            
-            .gauge-container {
-                width: 100px;
-                height: 100px;
-            }
-            
-            .gauge-label {
-                font-size: 0.7rem;
-                bottom: -30px;
-            }
-            
-            .performance-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 5px;
-            }
-            
-            .metric-item {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 4px;
-            }
+        .controls button {
+            background: #3498db;
+            color: white;
+            cursor: pointer;
+        }
+        .controls button:hover {
+            background: #2980b9;
+        }
+        .calls-table {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #34495e;
+            color: white;
+            font-weight: 600;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        .pagination {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .pagination button {
+            margin: 0 5px;
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .pagination button:hover {
+            background: #f8f9fa;
+        }
+        .pagination button.active {
+            background: #3498db;
+            color: white;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .waste-king-scores {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .score-item {
+            background: #ecf0f1;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .score-item .label {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-bottom: 5px;
+        }
+        .score-item .score {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
         }
     </style>
 </head>
 <body>
-    <div class="main-container">
-        <div class="header">
-            <div class="waste-king-logo">♻️ WASTE KING</div>
-            <h1>Call Analysis Dashboard</h1>
-            <p>Real-time insights from Xelion calls with AI-powered transcription and Waste King specific evaluation criteria</p>
-        </div>
-
-        <!-- Status Messages -->
-        <div id="alertContainer"></div>
-
-        <!-- Auto-Start Status -->
-        <div class="auto-status">
-            <span class="live-indicator"></span>
-            <strong>🚀 WASTE KING SYSTEM AUTO-STARTED!</strong><br>
-            Monitoring live calls automatically with Waste King specific evaluation criteria
-        </div>
-
-        <hr>
-
-        <div class="row">
-            <div class="col-md-4">
-                <div class="card">
-                    <h5 class="card-title">📊 Overall Statistics</h5>
-                    <div class="stats-item">Total Calls Processed: <strong id="totalCalls">0</strong></div>
-                    <div class="stats-item">Total Deepgram Cost: <strong id="totalCost">£0.00</strong></div>
-                    <div class="stats-item">Total Transcribed Duration: <strong id="totalDuration">0.00 mins</strong></div>
-                </div>
+    <div class="container">
+        <h1>🗑️ Waste King Call Analysis Dashboard</h1>
+        
+        <!-- Statistics Cards -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>Total Calls</h3>
+                <div class="value" id="totalCalls">-</div>
             </div>
-            <div class="col-md-8">
-                <div class="card">
-                    <h5 class="card-title">📈 Waste King Service Performance Overview</h5>
-                    <p class="text-muted mb-3" style="font-size: 0.9rem;">Overall scores by service type - based on Waste King training criteria</p>
-                    
-                    <div class="gauges-container">
-                        <!-- Top Row - Main Service Categories -->
-                        <div class="row text-center mb-4">
-                            <div class="col-lg-4 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="skipHireGauge"></canvas>
-                                        <div class="gauge-label">Skip Hire</div>
-                                    </div>
-                                    <small id="skipHireCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-4 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="manAndVanGauge"></canvas>
-                                        <div class="gauge-label">Man & Van</div>
-                                    </div>
-                                    <small id="manAndVanCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-4 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="grabHireGauge"></canvas>
-                                        <div class="gauge-label">Grab Hire</div>
-                                    </div>
-                                    <small id="grabHireCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Bottom Row - Other Categories -->
-                        <div class="row text-center justify-content-center">
-                            <div class="col-lg-3 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="collectionsGauge"></canvas>
-                                        <div class="gauge-label">Collections</div>
-                                    </div>
-                                    <small id="collectionsCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-3 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="clearanceGauge"></canvas>
-                                        <div class="gauge-label">Clearance</div>
-                                    </div>
-                                    <small id="clearanceCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-3 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="generalEnquiryGauge"></canvas>
-                                        <div class="gauge-label">General Enquiry</div>
-                                    </div>
-                                    <small id="generalEnquiryCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                            <div class="col-lg-3 col-md-6 mb-3">
-                                <div class="gauge-wrapper">
-                                    <div class="gauge-container">
-                                        <canvas id="complaintGauge"></canvas>
-                                        <div class="gauge-label">Complaint</div>
-                                    </div>
-                                    <small id="complaintCount" class="gauge-count">(0 calls)</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <div class="stat-card">
+                <h3>Total Cost (GBP)</h3>
+                <div class="value" id="totalCost">£-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Total Duration (hrs)</h3>
+                <div class="value" id="totalDuration">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>Avg WK Score</h3>
+                <div class="value" id="avgWKScore">-</div>
             </div>
         </div>
 
-        <div class="row">
-            <div class="col-md-6">
-                <div class="card">
-                    <h5 class="card-title">📞 Call Handling & Customer Assessment</h5>
-                    <div class="performance-section">
-                        <div class="performance-category">
-                            <div class="performance-header">
-                                <span class="performance-title">Call Handling & Telephone Manner</span>
-                                <span class="category-score" id="avgCallHandling">0.00</span>
-                                <span class="performance-max">/ 10</span>
-                            </div>
-                            <div class="performance-metrics">
-                                <div class="metric-item">
-                                    <span class="metric-label">Professional Telephone Manner</span>
-                                    <span class="metric-score" id="subProfessionalManner">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Listening to Customer Requirements</span>
-                                    <span class="metric-score" id="subListening">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Presenting Appropriate Solutions</span>
-                                    <span class="metric-score" id="subSolutions">0.00</span>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="performance-category">
-                            <div class="performance-header">
-                                <span class="performance-title">Customer Needs Assessment</span>
-                                <span class="category-score" id="avgNeedsAssessment">0.00</span>
-                                <span class="performance-max">/ 10</span>
-                            </div>
-                            <div class="performance-metrics">
-                                <div class="metric-item">
-                                    <span class="metric-label">Postcode Gathering</span>
-                                    <span class="metric-score" id="subPostcode">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Waste Type Identification</span>
-                                    <span class="metric-score" id="subWasteType">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Prohibited Items Check</span>
-                                    <span class="metric-score" id="subProhibitedItems">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Access Assessment</span>
-                                    <span class="metric-score" id="subAccessAssessment">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Permit Requirements</span>
-                                    <span class="metric-score" id="subPermitRequirements">0.00</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card">
-                    <h5 class="card-title">💼 Product Knowledge & Sales Excellence</h5>
-                    <div class="performance-section">
-                        <div class="performance-category">
-                            <div class="performance-header">
-                                <span class="performance-title">Product Knowledge & Information</span>
-                                <span class="category-score" id="avgProductKnowledge">0.00</span>
-                                <span class="performance-max">/ 10</span>
-                            </div>
-                            <div class="performance-metrics">
-                                <div class="metric-item">
-                                    <span class="metric-label">Offering Options</span>
-                                    <span class="metric-score" id="subOfferingOptions">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Following Procedures</span>
-                                    <span class="metric-score" id="subFollowingProcedures">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Communication Guidelines</span>
-                                    <span class="metric-score" id="subCommunicationGuidelines">0.00</span>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="performance-category">
-                            <div class="performance-header">
-                                <span class="performance-title">Objection Handling (ERICA Method)</span>
-                                <span class="category-score" id="avgObjectionHandling">0.00</span>
-                                <span class="performance-max">/ 10</span>
-                            </div>
-                            <div class="performance-metrics">
-                                <div class="metric-item">
-                                    <span class="metric-label">ERICA Objection Method</span>
-                                    <span class="metric-score" id="subEricaMethod">0.00</span>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="performance-category">
-                            <div class="performance-header">
-                                <span class="performance-title">Sales Closing</span>
-                                <span class="category-score" id="avgSalesClosing">0.00</span>
-                                <span class="performance-max">/ 10</span>
-                            </div>
-                            <div class="performance-metrics">
-                                <div class="metric-item">
-                                    <span class="metric-label">Sales Recommendation</span>
-                                    <span class="metric-score" id="subSalesRecommendation">0.00</span>
-                                </div>
-                                <div class="metric-item">
-                                    <span class="metric-label">Asking for Sale</span>
-                                    <span class="metric-score" id="subAskingForSale">0.00</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+        <!-- Waste King Main Scores -->
+        <div class="stat-card">
+            <h3>Waste King Main Evaluation Scores (1-10)</h3>
+            <div class="waste-king-scores" id="wasteKingScores">
+                <!-- Scores will be populated here -->
             </div>
         </div>
 
-        <!-- Calls List Section -->
-        <div class="calls-section">
-            <div class="card">
-                <h5 class="card-title">📋 Individual Call Details - Waste King Evaluation</h5>
-                
-                <!-- Filters -->
-                <div class="filters-section">
-                    <div class="row">
-                        <div class="col-md-3">
-                            <label for="audioFilter" class="form-label">Show Calls:</label>
-                            <select class="form-select" id="audioFilter">
-                                <option value="with_audio" selected>With Audio Only</option>
-                                <option value="all">All Calls</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="agentFilter" class="form-label">Filter by Agent:</label>
-                            <select class="form-select" id="agentFilter">
-                                <option value="">All Agents</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="categoryFilter" class="form-label">Filter by Service:</label>
-                            <select class="form-select" id="categoryFilter">
-                                <option value="">All Services</option>
-                            </select>
-                        </div>
-                        <div class="col-md-3">
-                            <label for="perPageSelect" class="form-label">Calls per page:</label>
-                            <select class="form-select" id="perPageSelect">
-                                <option value="25">25</option>
-                                <option value="50" selected>50</option>
-                                <option value="100">100</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="row mt-3">
-                        <div class="col-md-12">
-                            <button class="btn btn-primary" id="refreshCallsBtn">🔄 Refresh Calls</button>
-                            <button class="btn btn-secondary" id="clearFiltersBtn">Clear Filters</button>
-                            <button class="btn btn-info" id="checkStatusBtn">📊 Check Status</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Loading Spinner -->
-                <div id="callsLoading" class="loading-spinner" style="display: none;">
-                    <div class="spinner-border" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p>Loading calls...</p>
-                </div>
-
-                <!-- Calls Table -->
-                <div class="table-responsive">
-                    <table class="table calls-table" id="callsTable">
-                        <thead>
-                            <tr>
-                                <th>Date/Time</th>
-                                <th>Agent</th>
-                                <th>Phone</th>
-                                <th>Duration</th>
-                                <th>Service Type</th>
-                                <th>WK Score</th>
-                                <th>Call Handling</th>
-                                <th>Needs Assessment</th>
-                                <th>Product Knowledge</th>
-                                <th>Objection Handling</th>
-                                <th>Sales Closing</th>
-                                <th>Summary</th>
-                            </tr>
-                        </thead>
-                        <tbody id="callsTableBody">
-                            <!-- Calls will be loaded here -->
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- Pagination -->
-                <div class="pagination-container">
-                    <nav>
-                        <ul class="pagination" id="paginationControls">
-                            <!-- Pagination will be loaded here -->
-                        </ul>
-                    </nav>
-                </div>
-            </div>
+        <!-- Call Filters -->
+        <div class="controls">
+            <input type="text" id="agentFilter" placeholder="Filter by agent name">
+            <select id="categoryFilter">
+                <option value="">All Categories</option>
+                <option value="skip hire">Skip Hire</option>
+                <option value="man and van">Man and Van</option>
+                <option value="collections">Collections</option>
+                <option value="grab hire">Grab Hire</option>
+                <option value="clearance">Clearance</option>
+                <option value="general enquiry">General Enquiry</option>
+                <option value="complaint">Complaint</option>
+            </select>
+            <select id="audioFilter">
+                <option value="">All Calls</option>
+                <option value="with_audio">With Audio</option>
+                <option value="no_audio">No Audio</option>
+            </select>
+            <button onclick="loadCalls(1)">Filter Calls</button>
+            <button onclick="refreshDashboard()">Refresh</button>
         </div>
 
-        <!-- Summary Popup Modal -->
-        <div id="summaryPopup" class="summary-popup">
-            <div class="summary-popup-content">
-                <div class="summary-popup-header">
-                    <h5 id="summaryPopupTitle">Call Details</h5>
-                    <span class="summary-popup-close">&times;</span>
-                </div>
-                <div class="summary-popup-body" id="summaryPopupBody">
-                    <!-- Content will be loaded here -->
-                </div>
-            </div>
+        <!-- Calls Table -->
+        <div class="calls-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Date/Time</th>
+                        <th>Agent</th>
+                        <th>Phone</th>
+                        <th>Direction</th>
+                        <th>Duration</th>
+                        <th>Category</th>
+                        <th>WK Score</th>
+                        <th>Audio</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="callsTableBody">
+                    <tr><td colspan="9" class="loading">Loading calls...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="pagination">
+            <!-- Pagination buttons will be added here -->
         </div>
     </div>
 
     <script>
-        // Global variables
         let currentPage = 1;
-        let currentFilters = {
-            agent: '',
-            category: '',
-            per_page: 50,
-            audio_filter: 'with_audio'
-        };
+        const perPage = 50;
 
-        // Gauge chart variables
-        let skipHireGaugeChart, manAndVanGaugeChart, grabHireGaugeChart, collectionsGaugeChart, clearanceGaugeChart, generalEnquiryGaugeChart, complaintGaugeChart;
-
-        // FIXED Summary Popup Functions
-        function getSummaryCell(call) {
-            const summary = call.summary_translation || 'No summary available';
-            const transcript = call.transcription_text || '';
-            const oid = call.oid;
-            const agentName = call.agent_name;
-            
-            if (!summary || summary === 'No summary available') {
-                return '<span class="text-muted">No summary</span>';
-            }
-            
-            const preview = summary.length > 100 ? summary.substring(0, 100) + '...' : summary;
-            return `
-                <div>
-                    <div class="call-summary">${preview}</div>
-                    <button class="summary-btn" data-oid="${oid}" data-agent="${agentName}" data-summary="${encodeURIComponent(summary)}" data-transcript="${encodeURIComponent(transcript)}">
-                        See Details
-                    </button>
-                </div>
-            `;
-        }
-
-        function showSummaryPopup(oid, agentName, summary, transcript) {
-            document.getElementById('summaryPopupTitle').textContent = `Call Details - ${agentName} (${oid})`;
-            
-            let popupContent = '';
-            
-            // Add summary section
-            if (summary && summary !== 'No summary available') {
-                popupContent += `
-                    <div class="summary-section">
-                        <h6>📝 Waste King AI Analysis</h6>
-                        <p class="summary-text">${summary}</p>
-                    </div>
-                `;
-            }
-            
-            // Add transcript section
-            if (transcript && transcript.trim()) {
-                popupContent += `
-                    <div class="transcript-section">
-                        <h6>🎙️ Full Transcript</h6>
-                        <p class="transcript-text">${transcript}</p>
-                    </div>
-                `;
-            } else {
-                popupContent += `
-                    <div class="transcript-section">
-                        <h6>🎙️ Full Transcript</h6>
-                        <p class="no-transcript">No transcript available for this call</p>
-                    </div>
-                `;
-            }
-            
-            if (!popupContent) {
-                popupContent = '<p class="no-transcript">No summary or transcript available for this call</p>';
-            }
-            
-            document.getElementById('summaryPopupBody').innerHTML = popupContent;
-            document.getElementById('summaryPopup').style.display = 'block';
-        }
-
-        function closeSummaryPopup() {
-            document.getElementById('summaryPopup').style.display = 'none';
-        }
-
-        // --- Utility Functions ---
-        function showAlert(message, type = 'info') {
-            const alertContainer = document.getElementById('alertContainer');
-            const alertClass = type === 'error' ? 'error-alert' : 'success-alert';
-            
-            const alertDiv = document.createElement('div');
-            alertDiv.className = alertClass;
-            alertDiv.innerHTML = `
-                <strong>${type === 'error' ? '❌ Error:' : '✅ Success:'}</strong> ${message}
-                <button type="button" class="btn-close float-end" aria-label="Close" onclick="this.parentElement.remove()"></button>
-            `;
-            
-            alertContainer.appendChild(alertDiv);
-            
-            // Auto-remove after 5 seconds
-            setTimeout(() => {
-                if (alertDiv.parentElement) {
-                    alertDiv.remove();
-                }
-            }, 5000);
-        }
-
-        function handleFetchError(error, context = 'operation') {
-            console.error(`Error in ${context}:`, error);
-            showAlert(`Failed to ${context}. Please check the console for details.`, 'error');
-        }
-
-        // --- Gauge Chart Utility ---
-        function createGaugeChart(ctx, value, label) {
-            return new Chart(ctx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Score', 'Remaining'],
-                    datasets: [{
-                        data: [value, 10 - value],
-                        backgroundColor: ['#2c5530', '#e9ecef'],
-                        borderWidth: 0
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    cutout: '80%',
-                    rotation: 270,
-                    circumference: 180,
-                    plugins: {
-                        legend: { display: false },
-                        tooltip: { enabled: false }
-                    },
-                    elements: {
-                        arc: { borderWidth: 0 }
-                    },
-                    layout: {
-                        padding: { bottom: 20 }
-                    },
-                    animation: {
-                        animateRotate: true,
-                        animateScale: true
-                    },
-                    onClick: null,
-                    onHover: null,
-                },
-                plugins: [{
-                    id: 'textCenter',
-                    beforeDraw: function(chart) {
-                        var width = chart.width,
-                            height = chart.height,
-                            ctx = chart.ctx;
-
-                        ctx.restore();
-                        var fontSize = (height / 114).toFixed(2);
-                        ctx.font = "bold " + fontSize + "em sans-serif";
-                        ctx.textBaseline = "middle";
-
-                        var text = chart.data.datasets[0].data[0].toFixed(1) + '/10',
-                            textX = Math.round((width - ctx.measureText(text).width) / 2),
-                            textY = height - 30;
-
-                        ctx.fillText(text, textX, textY);
-                        ctx.save();
-                    }
-                }]
-            });
-        }
-
-        function updateGauges(data) {
-            try {
-                const categories = data.category_call_ratings;
-
-                // Update Skip Hire gauge
-                const skipHireCanvas = document.getElementById('skipHireGauge');
-                const skipHireScore = categories['skip hire'] ? categories['skip hire'].average_score : 0;
-                const skipHireCount = categories['skip hire'] ? categories['skip hire'].count : 0;
-                document.getElementById('skipHireCount').innerText = `(${skipHireCount} calls)`;
-                if (skipHireGaugeChart) skipHireGaugeChart.destroy();
-                skipHireGaugeChart = createGaugeChart(skipHireCanvas.getContext('2d'), skipHireScore, 'Skip Hire');
-
-                // Update Man & Van gauge
-                const manAndVanCanvas = document.getElementById('manAndVanGauge');
-                const manAndVanScore = categories['man and van'] ? categories['man and van'].average_score : 0;
-                const manAndVanCount = categories['man and van'] ? categories['man and van'].count : 0;
-                document.getElementById('manAndVanCount').innerText = `(${manAndVanCount} calls)`;
-                if (manAndVanGaugeChart) manAndVanGaugeChart.destroy();
-                manAndVanGaugeChart = createGaugeChart(manAndVanCanvas.getContext('2d'), manAndVanScore, 'Man & Van');
-
-                // Update Grab Hire gauge
-                const grabHireCanvas = document.getElementById('grabHireGauge');
-                const grabHireScore = categories['grab hire'] ? categories['grab hire'].average_score : 0;
-                const grabHireCount = categories['grab hire'] ? categories['grab hire'].count : 0;
-                document.getElementById('grabHireCount').innerText = `(${grabHireCount} calls)`;
-                if (grabHireGaugeChart) grabHireGaugeChart.destroy();
-                grabHireGaugeChart = createGaugeChart(grabHireCanvas.getContext('2d'), grabHireScore, 'Grab Hire');
-
-                // Update Collections gauge
-                const collectionsCanvas = document.getElementById('collectionsGauge');
-                const collectionsScore = categories['collections'] ? categories['collections'].average_score : 0;
-                const collectionsCount = categories['collections'] ? categories['collections'].count : 0;
-                document.getElementById('collectionsCount').innerText = `(${collectionsCount} calls)`;
-                if (collectionsGaugeChart) collectionsGaugeChart.destroy();
-                collectionsGaugeChart = createGaugeChart(collectionsCanvas.getContext('2d'), collectionsScore, 'Collections');
-
-                // Update Clearance gauge
-                const clearanceCanvas = document.getElementById('clearanceGauge');
-                const clearanceScore = categories['clearance'] ? categories['clearance'].average_score : 0;
-                const clearanceCount = categories['clearance'] ? categories['clearance'].count : 0;
-                document.getElementById('clearanceCount').innerText = `(${clearanceCount} calls)`;
-                if (clearanceGaugeChart) clearanceGaugeChart.destroy();
-                clearanceGaugeChart = createGaugeChart(clearanceCanvas.getContext('2d'), clearanceScore, 'Clearance');
-
-                // Update General Enquiry gauge
-                const generalEnquiryCanvas = document.getElementById('generalEnquiryGauge');
-                const generalEnquiryScore = categories['general enquiry'] ? categories['general enquiry'].average_score : 0;
-                const generalEnquiryCount = categories['general enquiry'] ? categories['general enquiry'].count : 0;
-                document.getElementById('generalEnquiryCount').innerText = `(${generalEnquiryCount} calls)`;
-                if (generalEnquiryGaugeChart) generalEnquiryGaugeChart.destroy();
-                generalEnquiryGaugeChart = createGaugeChart(generalEnquiryCanvas.getContext('2d'), generalEnquiryScore, 'General Enquiry');
-
-                // Update Complaint gauge
-                const complaintCanvas = document.getElementById('complaintGauge');
-                const complaintScore = categories['complaint'] ? categories['complaint'].average_score : 0;
-                const complaintCount = categories['complaint'] ? categories['complaint'].count : 0;
-                document.getElementById('complaintCount').innerText = `(${complaintCount} calls)`;
-                if (complaintGaugeChart) complaintGaugeChart.destroy();
-                complaintGaugeChart = createGaugeChart(complaintCanvas.getContext('2d'), complaintScore, 'Complaint');
-            } catch (error) {
-                console.error('Error updating gauges:', error);
-            }
-        }
-
-        // --- Score Badge Helper ---
-        function getScoreBadgeClass(score) {
-            if (score >= 8) return 'score-excellent';
-            if (score >= 6) return 'score-good';
-            if (score >= 4) return 'score-average';
-            return 'score-poor';
-        }
-
-        // --- Fetch and Update Data ---
-        async function fetchDashboardData() {
+        // Load dashboard data
+        async function loadDashboard() {
             try {
                 const response = await fetch('/get_dashboard_data');
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
                 const data = await response.json();
-
-                document.getElementById('totalCalls').innerText = data.total_calls.toLocaleString();
-                document.getElementById('totalCost').innerText = `£${data.total_cost_gbp.toFixed(2)}`;
-                document.getElementById('totalDuration').innerText = `${data.total_duration_minutes.toFixed(2)} mins`;
-
-                // Update Waste King specific scores
-                if (data.waste_king_main_ratings) {
-                    document.getElementById('avgCallHandling').innerText = data.waste_king_main_ratings.call_handling_telephone_manner.toFixed(2);
-                    document.getElementById('avgNeedsAssessment').innerText = data.waste_king_main_ratings.customer_needs_assessment.toFixed(2);
-                    document.getElementById('avgProductKnowledge').innerText = data.waste_king_main_ratings.product_knowledge_information.toFixed(2);
-                    document.getElementById('avgObjectionHandling').innerText = data.waste_king_main_ratings.objection_handling_erica.toFixed(2);
-                    document.getElementById('avgSalesClosing').innerText = data.waste_king_main_ratings.sales_closing.toFixed(2);
-                }
-
-                // Update Waste King sub-scores
-                if (data.waste_king_sub_ratings) {
-                    document.getElementById('subProfessionalManner').innerText = data.waste_king_sub_ratings.professional_telephone_manner.toFixed(2);
-                    document.getElementById('subListening').innerText = data.waste_king_sub_ratings.listening_customer_requirements.toFixed(2);
-                    document.getElementById('subSolutions').innerText = data.waste_king_sub_ratings.presenting_appropriate_solutions.toFixed(2);
-                    document.getElementById('subPostcode').innerText = data.waste_king_sub_ratings.postcode_gathering.toFixed(2);
-                    document.getElementById('subWasteType').innerText = data.waste_king_sub_ratings.waste_type_identification.toFixed(2);
-                    document.getElementById('subProhibitedItems').innerText = data.waste_king_sub_ratings.prohibited_items_check.toFixed(2);
-                    document.getElementById('subAccessAssessment').innerText = data.waste_king_sub_ratings.access_assessment.toFixed(2);
-                    document.getElementById('subPermitRequirements').innerText = data.waste_king_sub_ratings.permit_requirements.toFixed(2);
-                    document.getElementById('subOfferingOptions').innerText = data.waste_king_sub_ratings.offering_options.toFixed(2);
-                    document.getElementById('subFollowingProcedures').innerText = data.waste_king_sub_ratings.following_procedures.toFixed(2);
-                    document.getElementById('subCommunicationGuidelines').innerText = data.waste_king_sub_ratings.communication_guidelines.toFixed(2);
-                    document.getElementById('subEricaMethod').innerText = data.waste_king_sub_ratings.erica_objection_method.toFixed(2);
-                    document.getElementById('subSalesRecommendation').innerText = data.waste_king_sub_ratings.sales_recommendation.toFixed(2);
-                    document.getElementById('subAskingForSale').innerText = data.waste_king_sub_ratings.asking_for_sale.toFixed(2);
-                }
-
-                updateGauges(data);
-
+                
+                // Update statistics
+                document.getElementById('totalCalls').textContent = data.total_calls;
+                document.getElementById('totalCost').textContent = `£${data.total_cost_gbp}`;
+                document.getElementById('totalDuration').textContent = `${(data.total_duration_minutes / 60).toFixed(1)}h`;
+                
+                // Calculate average WK score
+                const wkScores = data.waste_king_main_ratings;
+                const avgScore = Object.values(wkScores).reduce((a, b) => a + b, 0) / Object.keys(wkScores).length;
+                document.getElementById('avgWKScore').textContent = avgScore.toFixed(1);
+                
+                // Update Waste King scores
+                const scoresContainer = document.getElementById('wasteKingScores');
+                scoresContainer.innerHTML = '';
+                
+                const scoreLabels = {
+                    'call_handling_telephone_manner': 'Call Handling',
+                    'customer_needs_assessment': 'Needs Assessment',
+                    'product_knowledge_information': 'Product Knowledge',
+                    'objection_handling_erica': 'Objection Handling',
+                    'sales_closing': 'Sales Closing',
+                    'compliance_procedures': 'Compliance'
+                };
+                
+                Object.entries(wkScores).forEach(([key, value]) => {
+                    const scoreDiv = document.createElement('div');
+                    scoreDiv.className = 'score-item';
+                    scoreDiv.innerHTML = `
+                        <div class="label">${scoreLabels[key] || key}</div>
+                        <div class="score">${value.toFixed(1)}</div>
+                    `;
+                    scoresContainer.appendChild(scoreDiv);
+                });
+                
             } catch (error) {
-                handleFetchError(error, 'fetch dashboard data');
+                console.error('Error loading dashboard:', error);
             }
         }
 
-        // --- Fetch Calls List ---
-        async function fetchCallsList() {
-            document.getElementById('callsLoading').style.display = 'block';
+        // Load calls list
+        async function loadCalls(page = 1) {
+            currentPage = page;
+            const agent = document.getElementById('agentFilter').value;
+            const category = document.getElementById('categoryFilter').value;
+            const audioFilter = document.getElementById('audioFilter').value;
+            
+            const params = new URLSearchParams({
+                page: page,
+                per_page: perPage,
+                agent: agent,
+                category: category,
+                audio_filter: audioFilter
+            });
             
             try {
-                const params = new URLSearchParams({
-                    page: currentPage,
-                    per_page: currentFilters.per_page,
-                    agent: currentFilters.agent,
-                    category: currentFilters.category,
-                    audio_filter: currentFilters.audio_filter
-                });
-
                 const response = await fetch(`/get_calls_list?${params}`);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 
                 const data = await response.json();
-
-                // Update filters dropdowns
-                updateFiltersDropdowns(data.filters);
                 
                 // Update table
-                updateCallsTable(data.calls);
+                const tbody = document.getElementById('callsTableBody');
+                tbody.innerHTML = '';
+                
+                if (data.calls.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="9" class="loading">No calls found</td></tr>';
+                    return;
+                }
+                
+                data.calls.forEach(call => {
+                    const row = document.createElement('tr');
+                    const dateTime = new Date(call.call_datetime).toLocaleString();
+                    const duration = `${Math.floor(call.duration_seconds / 60)}:${(call.duration_seconds % 60).toString().padStart(2, '0')}`;
+                    const hasAudio = call.has_transcription ? '✅' : '❌';
+                    const wkScore = call.overall_waste_king_score ? call.overall_waste_king_score.toFixed(1) : '-';
+                    
+                    row.innerHTML = `
+                        <td>${dateTime}</td>
+                        <td>${call.agent_name}</td>
+                        <td>${call.phone_number}</td>
+                        <td>${call.call_direction}</td>
+                        <td>${duration}</td>
+                        <td>${call.category}</td>
+                        <td>${wkScore}</td>
+                        <td>${hasAudio}</td>
+                        <td>${call.status}</td>
+                    `;
+                    
+                    row.onclick = () => showCallDetails(call.oid);
+                    row.style.cursor = 'pointer';
+                    tbody.appendChild(row);
+                });
                 
                 // Update pagination
                 updatePagination(data.pagination);
-
+                
             } catch (error) {
-                handleFetchError(error, 'fetch calls list');
-            } finally {
-                document.getElementById('callsLoading').style.display = 'none';
+                console.error('Error loading calls:', error);
+                document.getElementById('callsTableBody').innerHTML = 
+                    `<tr><td colspan="9" class="error">Error loading calls: ${error.message}</td></tr>`;
             }
         }
 
-        function updateFiltersDropdowns(filters) {
-            try {
-                // Update agents dropdown
-                const agentSelect = document.getElementById('agentFilter');
-                const currentAgent = agentSelect.value;
-                agentSelect.innerHTML = '<option value="">All Agents</option>';
-                filters.agents.forEach(agent => {
-                    const option = document.createElement('option');
-                    option.value = agent;
-                    option.textContent = agent;
-                    if (agent === currentAgent) option.selected = true;
-                    agentSelect.appendChild(option);
-                });
-
-                // Update categories dropdown
-                const categorySelect = document.getElementById('categoryFilter');
-                const currentCategory = categorySelect.value;
-                categorySelect.innerHTML = '<option value="">All Services</option>';
-                filters.categories.forEach(category => {
-                    const option = document.createElement('option');
-                    option.value = category;
-                    option.textContent = category;
-                    if (category === currentCategory) option.selected = true;
-                    categorySelect.appendChild(option);
-                });
-            } catch (error) {
-                console.error('Error updating filter dropdowns:', error);
-            }
-        }
-
-        function updateCallsTable(calls) {
-            try {
-                const tbody = document.getElementById('callsTableBody');
-                tbody.innerHTML = '';
-
-                if (calls.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="12" class="text-center">No calls found</td></tr>';
-                    return;
-                }
-
-                calls.forEach(call => {
-                    const row = document.createElement('tr');
-                    
-                    // Determine status badge
-                    let statusBadge = '';
-                    if (call.transcription_text) {
-                        statusBadge = '<span class="status-badge status-completed">Completed</span>';
-                    } else if (call.status && call.status.toLowerCase().includes('missed')) {
-                        statusBadge = '<span class="status-badge status-missed">Missed</span>';
-                    } else {
-                        statusBadge = '<span class="status-badge status-no-audio">No Audio</span>';
-                    }
-                    
-                    row.innerHTML = `
-                        <td>${call.formatted_datetime || call.call_datetime}</td>
-                        <td>
-                            <div class="agent-name">${call.agent_name}</div>
-                            ${statusBadge}
-                        </td>
-                        <td>${call.phone_number}</td>
-                        <td>${call.formatted_duration}</td>
-                        <td><span class="badge bg-secondary">${call.category || 'Unknown'}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.overall_waste_king_score || 0)}">${(call.overall_waste_king_score || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.call_handling_telephone_manner || 0)}">${(call.call_handling_telephone_manner || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.customer_needs_assessment || 0)}">${(call.customer_needs_assessment || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.product_knowledge_information || 0)}">${(call.product_knowledge_information || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.objection_handling_erica || 0)}">${(call.objection_handling_erica || 0).toFixed(1)}</span></td>
-                        <td><span class="score-badge ${getScoreBadgeClass(call.sales_closing || 0)}">${(call.sales_closing || 0).toFixed(1)}</span></td>
-                        <td>${getSummaryCell(call)}</td>
-                    `;
-                    tbody.appendChild(row);
-                });
-
-                // Add click event listeners to summary buttons
-                document.querySelectorAll('.summary-btn').forEach(button => {
-                    button.addEventListener('click', function() {
-                        const oid = this.getAttribute('data-oid');
-                        const agentName = this.getAttribute('data-agent');
-                        const summary = decodeURIComponent(this.getAttribute('data-summary'));
-                        const transcript = decodeURIComponent(this.getAttribute('data-transcript'));
-                        showSummaryPopup(oid, agentName, summary, transcript);
-                    });
-                });
-
-            } catch (error) {
-                console.error('Error updating calls table:', error);
-            }
-        }
-
+        // Update pagination
         function updatePagination(pagination) {
-            try {
-                const paginationControls = document.getElementById('paginationControls');
-                paginationControls.innerHTML = '';
-
-                if (pagination.pages <= 1) return;
-
-                // Previous button
-                const prevLi = document.createElement('li');
-                prevLi.className = `page-item ${pagination.page === 1 ? 'disabled' : ''}`;
-                prevLi.innerHTML = '<a class="page-link" href="#" data-page="' + (pagination.page - 1) + '">Previous</a>';
-                paginationControls.appendChild(prevLi);
-
-                // Page numbers
-                const startPage = Math.max(1, pagination.page - 2);
-                const endPage = Math.min(pagination.pages, pagination.page + 2);
-
-                for (let i = startPage; i <= endPage; i++) {
-                    const li = document.createElement('li');
-                    li.className = `page-item ${i === pagination.page ? 'active' : ''}`;
-                    li.innerHTML = '<a class="page-link" href="#" data-page="' + i + '">' + i + '</a>';
-                    paginationControls.appendChild(li);
-                }
-
-                // Next button
-                const nextLi = document.createElement('li');
-                nextLi.className = `page-item ${pagination.page === pagination.pages ? 'disabled' : ''}`;
-                nextLi.innerHTML = '<a class="page-link" href="#" data-page="' + (pagination.page + 1) + '">Next</a>';
-                paginationControls.appendChild(nextLi);
-            } catch (error) {
-                console.error('Error updating pagination:', error);
+            const container = document.getElementById('pagination');
+            container.innerHTML = '';
+            
+            // Previous button
+            if (pagination.has_prev) {
+                const prevBtn = document.createElement('button');
+                prevBtn.textContent = 'Previous';
+                prevBtn.onclick = () => loadCalls(pagination.page - 1);
+                container.appendChild(prevBtn);
+            }
+            
+            // Page numbers
+            for (let i = Math.max(1, pagination.page - 2); i <= Math.min(pagination.total_pages, pagination.page + 2); i++) {
+                const pageBtn = document.createElement('button');
+                pageBtn.textContent = i;
+                pageBtn.className = i === pagination.page ? 'active' : '';
+                pageBtn.onclick = () => loadCalls(i);
+                container.appendChild(pageBtn);
+            }
+            
+            // Next button
+            if (pagination.has_next) {
+                const nextBtn = document.createElement('button');
+                nextBtn.textContent = 'Next';
+                nextBtn.onclick = () => loadCalls(pagination.page + 1);
+                container.appendChild(nextBtn);
             }
         }
 
-        // --- Status Check Function ---
-        async function checkSystemStatus() {
-            try {
-                const response = await fetch('/status');
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const status = await response.json();
-                
-                let statusMessage = `Waste King System Status:\n`;
-                statusMessage += `- Background Process: ${status.background_running ? '✅ Running' : '❌ Stopped'}\n`;
-                statusMessage += `- OpenAI: ${status.openai_connection_test ? '✅ Connected' : '❌ Failed'}\n`;
-                statusMessage += `- Processed Calls: ${status.processing_stats.total_processed}\n`;
-                statusMessage += `- Last Error: ${status.last_error || 'None'}`;
-                
-                showAlert(statusMessage, status.background_running && status.openai_connection_test ? 'success' : 'error');
-                
-            } catch (error) {
-                handleFetchError(error, 'check system status');
-            }
+        // Show call details (placeholder)
+        function showCallDetails(oid) {
+            alert(`Call details for ${oid} - Feature coming soon!`);
         }
 
-        // --- Event Listeners ---
-        document.getElementById('refreshCallsBtn').addEventListener('click', () => {
-            currentPage = 1;
-            fetchCallsList();
-            showAlert('Refreshing calls list...', 'success');
-        });
+        // Refresh dashboard
+        function refreshDashboard() {
+            loadDashboard();
+            loadCalls(currentPage);
+        }
 
-        document.getElementById('clearFiltersBtn').addEventListener('click', () => {
-            document.getElementById('audioFilter').value = 'with_audio';
-            document.getElementById('agentFilter').value = '';
-            document.getElementById('categoryFilter').value = '';
-            document.getElementById('perPageSelect').value = '50';
-            currentFilters = { agent: '', category: '', per_page: 50, audio_filter: 'with_audio' };
-            currentPage = 1;
-            fetchCallsList();
-            showAlert('Filters cleared - showing calls with audio only', 'success');
-        });
-
-        document.getElementById('checkStatusBtn').addEventListener('click', checkSystemStatus);
-
-        // Filter change handlers
-        document.getElementById('audioFilter').addEventListener('change', (e) => {
-            currentFilters.audio_filter = e.target.value;
-            currentPage = 1;
-            fetchCallsList();
-        });
-
-        document.getElementById('agentFilter').addEventListener('change', (e) => {
-            currentFilters.agent = e.target.value;
-            currentPage = 1;
-            fetchCallsList();
-        });
-
-        document.getElementById('categoryFilter').addEventListener('change', (e) => {
-            currentFilters.category = e.target.value;
-            currentPage = 1;
-            fetchCallsList();
-        });
-
-        document.getElementById('perPageSelect').addEventListener('change', (e) => {
-            currentFilters.per_page = parseInt(e.target.value);
-            currentPage = 1;
-            fetchCallsList();
-        });
-
-        // Pagination click handler
-        document.getElementById('paginationControls').addEventListener('click', (e) => {
-            e.preventDefault();
-            if (e.target.classList.contains('page-link')) {
-                const page = parseInt(e.target.getAttribute('data-page'));
-                if (page && page !== currentPage) {
-                    currentPage = page;
-                    fetchCallsList();
-                }
-            }
-        });
-
-        // --- Auto-start functionality ---
+        // Initialize dashboard
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Waste King Dashboard loading - System auto-started via Flask route');
+            loadDashboard();
+            loadCalls(1);
             
-            // Setup popup event handlers
-            document.querySelector('.summary-popup-close').onclick = closeSummaryPopup;
-            document.getElementById('summaryPopup').onclick = function(event) {
-                if (event.target === this) {
-                    closeSummaryPopup();
-                }
-            };
-            document.addEventListener('keydown', function(event) {
-                if (event.key === 'Escape') {
-                    closeSummaryPopup();
-                }
-            });
-            
-            try {
-                // Initial data fetch
-                fetchDashboardData();
-                fetchCallsList();
-                
-                // Auto-refresh data every 15 seconds
-                setInterval(() => {
-                    try {
-                        fetchDashboardData();
-                        fetchCallsList();
-                    } catch (error) {
-                        console.error('Error in auto-refresh:', error);
-                    }
-                }, 15000);
-                
-                console.log('✅ Waste King Dashboard initialized - Auto-refreshing every 15 seconds');
-                showAlert('Waste King Dashboard loaded successfully! Monitoring NEW calls with proper evaluation criteria.', 'success');
-                
-            } catch (error) {
-                console.error('Error initializing dashboard:', error);
-                showAlert('Error initializing dashboard. Check console for details.', 'error');
+            // Auto-refresh every 30 seconds
+            setInterval(refreshDashboard, 30000);
+        });
+
+        // Handle filter inputs
+        document.getElementById('agentFilter').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                loadCalls(1);
             }
         });
     </script>
