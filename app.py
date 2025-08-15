@@ -1750,7 +1750,7 @@ def send_payment_sms_endpoint():
             conn.close()
 
         # Force £1 amount as specified
-        amount = "1.00"
+        amount=str(price)
 
         # Send SMS via Twilio with DYNAMIC payment link
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
