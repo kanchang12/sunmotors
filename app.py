@@ -1220,7 +1220,7 @@ def test_endpoint():
 # REPLACE YOUR EXISTING confirm_wasteking_booking FUNCTION WITH THIS:
 @app.route('/api/wasteking-confirm-booking', methods=['POST'])
 def confirm_wasteking_booking():
-    """Confirm booking and send payment SMS"""
+    """Confirm booking and send payment SMS - handles multiple field formats"""
     try:
         log_with_timestamp("="*80)
         log_with_timestamp("📝 [BOOKING CONFIRMATION] INITIATED")
@@ -1239,48 +1239,124 @@ def confirm_wasteking_booking():
             log_with_timestamp("❌ [ERROR] No data provided")
             return jsonify({"success": False, "message": "No data provided"}), 400
 
-        # Validate required fields
-        required = ['booking_ref', 'customer_phone', 'first_name', 'last_name', 'service_date']
-        missing = [field for field in required if not data.get(field)]
+        # 🔧 FLEXIBLE FIELD MAPPING - Handle different field name formats
+        normalized_data = {}
+        
+        # Handle booking_ref - create one if missing
+        normalized_data['booking_ref'] = data.get('booking_ref') 
+        if not normalized_data['booking_ref']:
+            # If no booking_ref provided, create a new one
+            log_with_timestamp("🆔 No booking_ref provided, creating new booking...")
+            booking_ref = create_wasteking_booking()
+            if not booking_ref:
+                return jsonify({"success": False, "message": "Failed to create booking reference"}), 500
+            normalized_data['booking_ref'] = booking_ref
+            log_with_timestamp(f"✅ Created new booking_ref: {booking_ref}")
+            
+            # If we're creating a new booking, we need to do the price search first
+            if data.get('postcode') and data.get('service') and data.get('type'):
+                search_payload = {
+                    "search": {
+                        "postCode": data['postcode'],
+                        "service": data['service'],
+                        "type": data['type']
+                    }
+                }
+                log_with_timestamp(f"🔍 Doing price search first: {json.dumps(search_payload, indent=2)}")
+                price_response = update_wasteking_booking(booking_ref, search_payload)
+                if not price_response:
+                    return jsonify({"success": False, "message": "Failed to get pricing"}), 500
+                log_with_timestamp(f"💰 Price search complete: £{price_response.get('quote', {}).get('price', 'N/A')}")
+        
+        # Handle customer phone - multiple possible field names
+        normalized_data['customer_phone'] = (
+            data.get('customer_phone') or 
+            data.get('phone') or 
+            data.get('customerPhone') or
+            data.get('Phone')
+        )
+        
+        # Handle names - try different combinations
+        normalized_data['first_name'] = (
+            data.get('first_name') or 
+            data.get('firstName') or 
+            data.get('firstname') or
+            data.get('name', '').split(' ')[0] if data.get('name') else 'Customer'
+        )
+        
+        normalized_data['last_name'] = (
+            data.get('last_name') or 
+            data.get('lastName') or 
+            data.get('lastname') or
+            ' '.join(data.get('name', '').split(' ')[1:]) if data.get('name') and len(data.get('name', '').split(' ')) > 1 else 'Unknown'
+        )
+        
+        # Handle service date - multiple possible field names
+        normalized_data['service_date'] = (
+            data.get('service_date') or 
+            data.get('date') or 
+            data.get('serviceDate') or
+            data.get('delivery_date')
+        )
+        
+        # Handle other optional fields
+        normalized_data['service_time'] = data.get('service_time', data.get('time', 'am'))
+        normalized_data['email'] = data.get('email', data.get('emailAddress', ''))
+        normalized_data['postcode'] = data.get('postcode', data.get('postCode', ''))
+        normalized_data['placement'] = data.get('placement', 'drive')
+        
+        log_with_timestamp(f"🔧 Normalized data: {json.dumps(normalized_data, indent=2)}")
+        
+        # Validate required fields after normalization
+        required = ['booking_ref', 'customer_phone']  # Relaxed requirements
+        missing = [field for field in required if not normalized_data.get(field)]
         if missing:
-            log_with_timestamp(f"❌ [VALIDATION] Missing fields: {missing}")
+            log_with_timestamp(f"❌ [VALIDATION] Missing critical fields: {missing}")
             return jsonify({
                 "success": False,
-                "message": f"Missing required fields: {', '.join(missing)}"
+                "message": f"Missing required fields: {', '.join(missing)}",
+                "provided_fields": list(data.keys()),
+                "normalized_fields": list(normalized_data.keys())
             }), 400
 
-        booking_ref = data['booking_ref']
+        booking_ref = normalized_data['booking_ref']
         log_with_timestamp(f"🔍 Processing booking reference: {booking_ref}")
 
-        # 1. Add Customer Details
-        customer_payload = {
-            "customer": {
-                "firstName": data['first_name'],
-                "lastName": data['last_name'],
-                "phone": data['customer_phone'],
-                "emailAddress": data.get('email', ''),
-                "addressPostcode": data.get('postcode', '')
+        # 1. Add Customer Details (only if we have names)
+        if normalized_data.get('first_name') and normalized_data.get('last_name'):
+            customer_payload = {
+                "customer": {
+                    "firstName": normalized_data['first_name'],
+                    "lastName": normalized_data['last_name'],
+                    "phone": normalized_data['customer_phone'],
+                    "emailAddress": normalized_data.get('email', ''),
+                    "addressPostcode": normalized_data.get('postcode', '')
+                }
             }
-        }
-        log_with_timestamp(f"👤 Adding customer details: {json.dumps(customer_payload, indent=2)}")
-        customer_response = update_wasteking_booking(booking_ref, customer_payload)
-        if not customer_response:
-            log_with_timestamp("❌ [API FAILURE] Couldn't add customer details")
-            return jsonify({"success": False, "message": "Failed to add customer details"}), 500
+            log_with_timestamp(f"👤 Adding customer details: {json.dumps(customer_payload, indent=2)}")
+            customer_response = update_wasteking_booking(booking_ref, customer_payload)
+            if not customer_response:
+                log_with_timestamp("❌ [API FAILURE] Couldn't add customer details")
+                return jsonify({"success": False, "message": "Failed to add customer details"}), 500
+        else:
+            log_with_timestamp("⚠️ Skipping customer details - missing name information")
 
-        # 2. Add Service Details
-        service_payload = {
-            "service": {
-                "date": data['service_date'],
-                "time": data.get('service_time', 'am'),
-                "placement": data.get('placement', 'drive')
+        # 2. Add Service Details (only if we have service date)
+        if normalized_data.get('service_date'):
+            service_payload = {
+                "service": {
+                    "date": normalized_data['service_date'],
+                    "time": normalized_data.get('service_time', 'am'),
+                    "placement": normalized_data.get('placement', 'drive')
+                }
             }
-        }
-        log_with_timestamp(f"📅 Adding service details: {json.dumps(service_payload, indent=2)}")
-        service_response = update_wasteking_booking(booking_ref, service_payload)
-        if not service_response:
-            log_with_timestamp("❌ [API FAILURE] Couldn't add service details")
-            return jsonify({"success": False, "message": "Failed to add service details"}), 500
+            log_with_timestamp(f"📅 Adding service details: {json.dumps(service_payload, indent=2)}")
+            service_response = update_wasteking_booking(booking_ref, service_payload)
+            if not service_response:
+                log_with_timestamp("❌ [API FAILURE] Couldn't add service details")
+                return jsonify({"success": False, "message": "Failed to add service details"}), 500
+        else:
+            log_with_timestamp("⚠️ Skipping service details - missing date information")
 
         # 3. Generate Payment Link
         payment_payload = {
@@ -1294,6 +1370,7 @@ def confirm_wasteking_booking():
             return jsonify({"success": False, "message": "Failed to generate payment link"}), 500
 
         payment_link = payment_response['quote']['paymentLink']
+        price = payment_response['quote'].get('price', '0')
         log_with_timestamp(f"✅ Payment link generated: {payment_link}")
 
         # Store the payment link in the database for later SMS use
@@ -1305,29 +1382,36 @@ def confirm_wasteking_booking():
                 (quote_id, booking_ref, postcode, service, price_data, created_at, status, customer_phone, payment_link) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                booking_ref, booking_ref, data.get('postcode', ''), 'confirmed',
+                booking_ref, booking_ref, normalized_data.get('postcode', ''), 'confirmed',
                 json.dumps(payment_response), datetime.now().isoformat(),
-                'confirmed', data['customer_phone'], payment_link
+                'confirmed', normalized_data['customer_phone'], payment_link
             ))
             conn.commit()
             conn.close()
 
-        # 4. Send SMS
-        sms_response = send_payment_sms(
-            booking_ref=booking_ref,
-            phone=data['customer_phone'],
-            payment_link=payment_link,
-            amount=str(payment_response['quote']['price'])
-        )
-        
-        if not sms_response.get('success'):
-            log_with_timestamp(f"❌ [SMS FAILURE] {sms_response.get('message')}")
-            return jsonify({
-                "success": False,
-                "message": "Booking confirmed but SMS failed",
-                "payment_link": payment_link,
-                "booking_ref": booking_ref
-            }), 500
+        # 4. Send SMS (only if we have phone number)
+        if normalized_data.get('customer_phone'):
+            sms_response = send_payment_sms(
+                booking_ref=booking_ref,
+                phone=normalized_data['customer_phone'],
+                payment_link=payment_link,
+                amount=str(price)
+            )
+            
+            if not sms_response.get('success'):
+                log_with_timestamp(f"❌ [SMS FAILURE] {sms_response.get('message')}")
+                return jsonify({
+                    "success": True,  # Still success since booking was created
+                    "message": "Booking confirmed but SMS failed",
+                    "payment_link": payment_link,
+                    "booking_ref": booking_ref,
+                    "price": price,
+                    "sms_error": sms_response.get('message')
+                })
+            
+            log_with_timestamp("📱 SMS sent successfully")
+        else:
+            log_with_timestamp("⚠️ No phone number provided, skipping SMS")
 
         log_with_timestamp("🎉 [SUCCESS] Booking fully processed")
         return jsonify({
@@ -1335,7 +1419,9 @@ def confirm_wasteking_booking():
             "message": "Booking confirmed and SMS sent successfully",
             "booking_ref": booking_ref,
             "payment_link": payment_link,
-            "price": payment_response['quote']['price']
+            "price": price,
+            "customer_phone": normalized_data.get('customer_phone'),
+            "normalized_data": normalized_data  # For debugging
         })
 
     except Exception as e:
@@ -1346,7 +1432,6 @@ def confirm_wasteking_booking():
             "message": "System error during booking",
             "error": str(e)
         }), 500
-
 @app.route('/api/wasteking-get-price', methods=['POST'])
 def get_wasteking_price():
     """Get price only - no booking created"""
