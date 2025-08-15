@@ -268,6 +268,33 @@ def init_db():
     except Exception as e:
         log_error("Failed to initialize database", e)
 
+
+def get_current_datetime_info():
+    """Get current UK date/time information for AI context"""
+    from datetime import datetime, timezone, timedelta
+    
+    # UK timezone (GMT/BST)
+    uk_tz = timezone(timedelta(hours=0))  # Adjust for BST (+1) if needed
+    now_utc = datetime.now(timezone.utc)
+    now_uk = now_utc.replace(tzinfo=uk_tz)
+    
+    return {
+        "current_date": now_uk.strftime("%Y-%m-%d"),
+        "current_time": now_uk.strftime("%H:%M"),
+        "current_day": now_uk.strftime("%A"),
+        "current_datetime_utc": now_utc.isoformat(),
+        "current_datetime_uk": now_uk.strftime("%Y-%m-%d %H:%M:%S"),
+        "tomorrow_date": (now_uk + timedelta(days=1)).strftime("%Y-%m-%d"),
+        "system_timezone": "UTC",
+        "uk_business_hours": {
+            "monday_thursday": "8:00am-5:00pm",
+            "friday": "8:00am-4:30pm", 
+            "saturday": "9:00am-12:00pm",
+            "sunday": "closed"
+        }
+    }
+
+
 # --- Xelion API Functions (ALL ORIGINAL FUNCTIONS PRESERVED) ---
 def xelion_login() -> bool:
     """Login using the working pattern"""
@@ -1217,7 +1244,6 @@ def test_endpoint():
         ]
     })
 
-# REPLACE YOUR EXISTING confirm_wasteking_booking FUNCTION WITH THIS:
 @app.route('/api/wasteking-confirm-booking', methods=['POST'])
 def confirm_wasteking_booking():
     """Confirm booking and send payment SMS - handles multiple field formats"""
@@ -1389,29 +1415,44 @@ def confirm_wasteking_booking():
             conn.commit()
             conn.close()
 
-        # 4. Send SMS (only if we have phone number)
+        # 4. Send SMS (only if we have phone number) - FORCE £1 FOR TESTING
         if normalized_data.get('customer_phone'):
             sms_response = send_payment_sms(
                 booking_ref=booking_ref,
                 phone=normalized_data['customer_phone'],
                 payment_link=payment_link,
-                amount="1.00"
+                amount="1.00"  # 🔥 FORCE £1 FOR TESTING
             )
             
             if not sms_response.get('success'):
                 log_with_timestamp(f"❌ [SMS FAILURE] {sms_response.get('message')}")
+                # Get current date/time info for error response
+                datetime_info = get_current_datetime_info()
                 return jsonify({
                     "success": True,  # Still success since booking was created
                     "message": "Booking confirmed but SMS failed",
                     "payment_link": payment_link,
                     "booking_ref": booking_ref,
                     "price": price,
-                    "sms_error": sms_response.get('message')
+                    "sms_error": sms_response.get('message'),
+                    
+                    # Add date/time context even for partial success
+                    "system_date": datetime_info["current_date"],
+                    "system_time": datetime_info["current_time"],
+                    "ai_context": {
+                        "today_is": datetime_info["current_date"],
+                        "current_time": datetime_info["current_time"],
+                        "tomorrow_is": datetime_info["tomorrow_date"],
+                        "current_day": datetime_info["current_day"]
+                    }
                 })
             
             log_with_timestamp("📱 SMS sent successfully")
         else:
             log_with_timestamp("⚠️ No phone number provided, skipping SMS")
+
+        # Get current date/time info for successful response
+        datetime_info = get_current_datetime_info()
 
         log_with_timestamp("🎉 [SUCCESS] Booking fully processed")
         return jsonify({
@@ -1421,17 +1462,50 @@ def confirm_wasteking_booking():
             "payment_link": payment_link,
             "price": price,
             "customer_phone": normalized_data.get('customer_phone'),
-            "normalized_data": normalized_data  # For debugging
+            "customer_name": f"{normalized_data.get('first_name', 'Customer')} {normalized_data.get('last_name', 'Unknown')}",
+            
+            # 🔥 ADD SYSTEM DATE/TIME INFO FOR AI CONTEXT
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"], 
+            "system_day": datetime_info["current_day"],
+            "tomorrow_date": datetime_info["tomorrow_date"],
+            "current_datetime_utc": datetime_info["current_datetime_utc"],
+            "business_hours": datetime_info["uk_business_hours"],
+            
+            # Context for AI to understand relative dates
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"],
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"],
+                "booking_confirmed_at": datetime_info["current_datetime_uk"]
+            }
         })
 
     except Exception as e:
         log_with_timestamp(f"🔥 [UNHANDLED EXCEPTION] {str(e)}")
         log_with_timestamp(traceback.format_exc())
+        
+        # Get current date/time info for error response  
+        datetime_info = get_current_datetime_info()
+        
         return jsonify({
             "success": False,
             "message": "System error during booking",
-            "error": str(e)
+            "error": str(e),
+            
+            # Even on errors, provide date context for AI
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"],
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"], 
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"]
+            }
         }), 500
+
+
 @app.route('/api/wasteking-get-price', methods=['POST'])
 def get_wasteking_price():
     """Get price only - no booking created"""
@@ -1485,26 +1559,45 @@ def get_wasteking_price():
 
         log_with_timestamp(f"💵 Price data received: {json.dumps(price_data.get('quote', {}), indent=2)}")
         
-        # Format response for ElevenLabs
+        # Get current date/time info
+        datetime_info = get_current_datetime_info()
+        
+        # Format response for ElevenLabs with date/time context
         response = {
             "success": True,
             "booking_ref": booking_ref,
             "price": price_data.get('quote', {}).get('price'),
             "service_price": price_data.get('quote', {}).get('servicePrice'),
-            "message": f"The estimated price is £{price_data.get('quote', {}).get('price')} including VAT"
+            "message": f"The estimated price is £{price_data.get('quote', {}).get('price')} including VAT",
+            
+            # 🔥 ADD SYSTEM DATE/TIME INFO FOR AI CONTEXT
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"], 
+            "system_day": datetime_info["current_day"],
+            "tomorrow_date": datetime_info["tomorrow_date"],
+            "current_datetime_utc": datetime_info["current_datetime_utc"],
+            "business_hours": datetime_info["uk_business_hours"],
+            
+            # Context for AI
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"],
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"]
+            }
         }
+        
         log_with_timestamp(f"📤 Sending response: {json.dumps(response, indent=2)}")
         return jsonify(response)
 
     except Exception as e:
         log_with_timestamp(f"🔥 [UNHANDLED EXCEPTION] {str(e)}")
-        log_with_timestamp(traceback.format_exc())  # Full stack trace
+        log_with_timestamp(traceback.format_exc())
         return jsonify({
             "success": False,
             "message": "Unable to get price right now",
             "error": str(e)
         }), 500
-
 # --- Dashboard and Call Management Routes ---
 @app.route('/get_dashboard_data')
 def get_dashboard_data():
