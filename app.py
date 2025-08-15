@@ -762,17 +762,6 @@ def wasteking_quote():
                 'speak': 'I apologize, there was an issue getting your quote. Let me transfer you to our team who can help you directly.'
             }), 500
         
-        # Create WasteKing booking
-        booking_result = create_wasteking_booking(data)
-        
-        if not booking_result:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to create booking',
-                'speak': 'I apologize, there was an issue getting your quote. Let me transfer you to our team who can help you directly.'
-            }), 500
-        
-        
         # Store booking in database
         try:
             conn = get_db_connection()
@@ -942,169 +931,6 @@ def check_postcode():
         
         # Basic UK postcode validation (after formatting)
         uk_postcode_pattern = r'^[A-Z]{1,2}[0-9R][0-9A-Z]? [0-9][A-Z]{2}$'
-
-@app.route('/api/transfer-call', methods=['POST'])
-def transfer_call():
-    """Handle call transfer requests from ElevenLabs AI"""
-    try:
-        data = request.get_json()
-        log_with_timestamp(f"🔄 Call transfer request: {json.dumps(data, indent=2)}")
-        
-        call_sid = data.get('call_sid')
-        customer_name = data.get('customer_name')
-        reason = data.get('reason')
-        
-        if not all([call_sid, customer_name, reason]):
-            return jsonify({
-                'success': False,
-                'error': 'Missing required transfer details'
-            }), 400
-        
-        # Log transfer request (you would integrate with your call center system here)
-        transfer_details = {
-            'call_sid': call_sid,
-            'customer_name': customer_name,
-            'phone_number': data.get('phone_number'),
-            'postcode': data.get('postcode'),
-            'service_type': data.get('service_type'),
-            'reason': reason,
-            'urgency': data.get('urgency', 'medium'),
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        log_with_timestamp(f"📋 Transfer logged: {json.dumps(transfer_details, indent=2)}")
-        
-        return jsonify({
-            'success': True,
-            'transfer_id': str(uuid.uuid4()),
-            'speak': f"I have all your details, {customer_name}. Please hold while I transfer you to the right person who can help with {reason}. They\'ll be with you shortly."
-        })
-        
-    except Exception as e:
-        log_error("Error in transfer_call endpoint", e)
-        return jsonify({
-            'success': False,
-            'error': 'Internal server error',
-            'speak': 'Let me transfer you to our team right away.'
-        }), 500
-
-# --- Authentication Routes (EXISTING) ---
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'GET':
-        return redirect('/')
-        
-    try:
-        if request.is_json:
-            data = request.get_json()
-            username = data.get('username') if data else None
-            password = data.get('password') if data else None
-        else:
-            username = request.form.get('username')
-            password = request.form.get('password')
-        
-        log_with_timestamp(f"Login attempt for username: {username}")
-        
-        if not username or not password:
-            return jsonify({'success': False, 'message': 'Username and password required'})
-        
-        user = authenticate_user(username, password)
-        if user:
-            session.permanent = True
-            session['user'] = user
-            session['login_time'] = datetime.now().isoformat()
-            
-            log_with_timestamp(f"User {username} logged in successfully")
-            return jsonify({'success': True, 'user': user})
-        else:
-            log_with_timestamp(f"Failed login attempt for username: {username}")
-            return jsonify({'success': False, 'message': 'Invalid credentials'})
-            
-    except Exception as e:
-        log_error("Login error", e)
-        return jsonify({'success': False, 'message': 'Login failed - server error'})
-
-@app.route('/logout', methods=['GET', 'POST'])
-def logout():
-    try:
-        if 'user' in session:
-            log_with_timestamp(f"User {session['user']['username']} logged out")
-        session.clear()
-        
-        if request.method == 'GET':
-            return redirect('/')
-        return jsonify({'success': True})
-        
-    except Exception as e:
-        log_error("Logout error", e)
-        if request.method == 'GET':
-            return redirect('/')
-        return jsonify({'success': False, 'message': 'Logout failed'})
-
-@app.route('/check-session')
-def check_session():
-    """Check if user session is still active"""
-    try:
-        log_with_timestamp(f"Session check - Session keys: {list(session.keys())}")
-        
-        if 'user' in session:
-            user = session['user']
-            login_time = session.get('login_time', 'Unknown')
-            log_with_timestamp(f"✅ Active session found for user: {user['username']}")
-            return jsonify({
-                'logged_in': True, 
-                'user': user,
-                'login_time': login_time,
-                'session_keys': list(session.keys())
-            })
-        else:
-            log_with_timestamp("❌ No active session found")
-            return jsonify({'logged_in': False, 'session_keys': list(session.keys())})
-    except Exception as e:
-        log_error("Session check error", e)
-        return jsonify({'logged_in': False, 'error': str(e)})
-
-@app.route('/')
-def index():
-    """Main page"""
-    return render_template('index.html')
-
-@app.route('/status')
-def get_status():
-    """Get system status"""
-    openai_test_result = test_openai_connection()
-    return jsonify({
-        "background_running": background_process_running,
-        "processing_stats": processing_stats,
-        "openai_available": OPENAI_AVAILABLE,
-        "openai_connection_test": openai_test_result,
-        "openai_api_key_configured": OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key',
-        "wasteking_api_configured": WASTEKING_ACCESS_TOKEN and WASTEKING_ACCESS_TOKEN != 'your_wasteking_access_token',
-        "last_poll": processing_stats.get('last_poll_time', 'Never'),
-        "last_error": processing_stats.get('last_error', 'None'),
-        "session_active": 'user' in session,
-        "current_user": session.get('user', {}).get('username', 'None') if 'user' in session else 'None'
-    })
-
-if __name__ == '__main__':
-    # Test configurations on startup
-    log_with_timestamp("🚀 WasteKing AI Integration System starting up...")
-    log_with_timestamp(f"OpenAI available: {OPENAI_AVAILABLE}")
-    log_with_timestamp(f"WasteKing API configured: {WASTEKING_ACCESS_TOKEN != 'your_wasteking_access_token'}")
-    
-    if OPENAI_AVAILABLE and OPENAI_API_KEY and OPENAI_API_KEY != 'your_openai_api_key':
-        openai_test = test_openai_connection()
-        log_with_timestamp(f"OpenAI test: {'✅ PASSED' if openai_test else '❌ FAILED'}")
-    else:
-        log_with_timestamp("⚠️ OpenAI not configured - using fallback scores")
-    
-    log_with_timestamp("✅ All users created with email logins and password: password!12")
-    log_with_timestamp("✅ Manager login: manager / manager!1")
-    log_with_timestamp("✅ WasteKing API Integration ready at http://localhost:5000")
-    log_with_timestamp(f"✅ Sales Team filter: Only processing calls from {len(SALES_TEAM_AGENTS)} agents: {', '.join(SALES_TEAM_AGENTS)}")
-    
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
         
         if re.match(uk_postcode_pattern, postcode):
             service_available = True
@@ -1273,7 +1099,7 @@ def get_status():
 
 if __name__ == '__main__':
     # Test configurations on startup
-   
+
     
     port = int(os.environ.get("PORT", 5000))
     app.run(debug=True, host='0.0.0.0', port=port)
