@@ -1111,6 +1111,127 @@ def categorize_call(transcript: str) -> str:
         return "complaint"
     return "general enquiry"
 
+
+@app.route('/api/send-payment-sms', methods=['POST'])
+def send_payment_sms_endpoint():
+    """Send payment SMS only - third tool"""
+    log_with_timestamp("="*50)
+    log_with_timestamp("💳 SMS PAYMENT ENDPOINT CALLED")
+    log_with_timestamp("="*50)
+    
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "No JSON data received"
+            }), 400
+
+        # Validate required fields
+        required_fields = ['customer_phone', 'call_sid', 'amount']
+        missing_fields = [field for field in required_fields if not data.get(field)]
+        if missing_fields:
+            return jsonify({
+                "status": "error",
+                "message": f"Missing required fields: {', '.join(missing_fields)}"
+            }), 400
+
+        # Clean and validate phone number
+        phone = data['customer_phone'].strip()
+        if phone.startswith('0'):
+            phone = f"+44{phone[1:]}"
+        elif phone.startswith('44'):
+            phone = f"+{phone}"
+        
+        if not re.match(r'^\+44\d{9,10}$', phone):
+            return jsonify({
+                "status": "error",
+                "message": "Invalid UK phone number format",
+                "example": "+447700900123"
+            }), 400
+
+        # Get quote_id from the call_sid or use it directly
+        quote_id = data.get('quote_id', data['call_sid'])
+        
+        # IMPORTANT: Get the dynamic payment link from the quote
+        payment_link = PAYPAL_PAYMENT_LINK  # fallback
+        
+        # Look up the quote in database to get the dynamic payment link
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT payment_link FROM price_quotes WHERE quote_id = ? OR booking_ref = ?", (quote_id, quote_id))
+            result = cursor.fetchone()
+            if result and result[0]:
+                payment_link = result[0]
+                log_with_timestamp(f"✅ Found dynamic payment link for quote {quote_id}")
+            else:
+                log_with_timestamp(f"⚠️ No dynamic payment link found for quote {quote_id}, using fallback PayPal")
+            conn.close()
+
+        # Force £1 amount as specified
+        amount = "1.00"
+
+        # Send SMS via Twilio with DYNAMIC payment link
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        
+        message_body = f"""Waste King Payment
+Amount: £{amount}
+Reference: {quote_id}
+
+Pay securely:
+{payment_link}
+
+After payment, you'll get confirmation.
+Thank you!"""
+
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone
+        )
+
+        log_with_timestamp(f"✅ SMS sent with dynamic payment link: {message.sid}")
+
+        # Store in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments 
+                (quote_id, customer_phone, amount, sms_sid, call_sid, elevenlabs_conversation_id, created_at, paypal_link) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                quote_id,
+                phone,
+                float(amount),
+                message.sid,
+                data['call_sid'],
+                data.get('elevenlabs_conversation_id', 'Unknown'),
+                datetime.now().isoformat(),
+                payment_link  # Store the actual payment link used
+            ))
+            conn.commit()
+            conn.close()
+
+        return jsonify({
+            "status": "success",
+            "message": f"SMS sent successfully with dynamic payment link",
+            "amount": f"£{amount}",
+            "call_sid": data['call_sid'],
+            "quote_id": quote_id,
+            "payment_link_used": payment_link
+        })
+
+    except Exception as e:
+        log_error("Payment processing failed", e)
+        return jsonify({
+            "status": "error",
+            "message": "System error",
+            "debug": str(e)
+        }), 500
+
+
 # --- Twilio Functions ---
 def get_twilio_client():
     """Initialize Twilio client"""
