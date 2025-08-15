@@ -1421,7 +1421,7 @@ def confirm_wasteking_booking():
                 booking_ref=booking_ref,
                 phone=normalized_data['customer_phone'],
                 payment_link=payment_link,
-                amount="1.00"  # 🔥 FORCE £1 FOR TESTING
+                amount=str(price)  # 🔥 FORCE £1 FOR TESTING
             )
             
             if not sms_response.get('success'):
