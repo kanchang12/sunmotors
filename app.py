@@ -1506,7 +1506,7 @@ def confirm_wasteking_booking():
         }), 500
 
 
-@app.route('/api/wasteking-get-price', methods=['POST'])
+@app.route('/api/wasteking-get-price', methods=['POST', 'GET'])
 def get_wasteking_price():
     """Get price only - no booking created"""
     try:
