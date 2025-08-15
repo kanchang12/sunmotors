@@ -941,7 +941,7 @@ def check_postcode():
         log_with_timestamp(f"📍 Checking postcode: '{raw_postcode}' -> '{postcode}'")
         
         # Basic UK postcode validation (after formatting)
-        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9R][0-9A-Z]? [0-9][A-Z]{2}
+        uk_postcode_pattern = r'^[A-Z]{1,2}[0-9R][0-9A-Z]? [0-9][A-Z]{2}$'
 
 @app.route('/api/transfer-call', methods=['POST'])
 def transfer_call():
