@@ -1187,15 +1187,54 @@ def get_status():
         "last_poll": processing_stats.get('last_poll_time', 'Never'),
         "last_error": processing_stats.get('last_error', 'None')
     })
+
+
+# =============================================================================
+# FLASK CODE - ADD/REPLACE THESE FUNCTIONS IN YOUR app.py
+# =============================================================================
+
+# Add CORS headers
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+# Test endpoint
+@app.route('/api/test', methods=['GET', 'POST'])
+def test_endpoint():
+    """Test endpoint to verify system is working"""
+    return jsonify({
+        "status": "success",
+        "message": "WasteKing API system is working",
+        "timestamp": datetime.now().isoformat(),
+        "method": request.method,
+        "available_endpoints": [
+            "/api/wasteking-get-price",
+            "/api/wasteking-confirm-booking", 
+            "/api/send-payment-sms"
+        ]
+    })
+
+# REPLACE YOUR EXISTING confirm_wasteking_booking FUNCTION WITH THIS:
 @app.route('/api/wasteking-confirm-booking', methods=['POST'])
 def confirm_wasteking_booking():
     """Confirm booking and send payment SMS"""
     try:
         log_with_timestamp("="*80)
         log_with_timestamp("📝 [BOOKING CONFIRMATION] INITIATED")
-        log_with_timestamp(f"📦 Request Data: {json.dumps(request.get_json(), indent=2)}")
         
-        data = request.get_json()
+        # Get JSON data with better error handling
+        try:
+            data = request.get_json(force=True)
+        except Exception as json_error:
+            log_with_timestamp(f"❌ [JSON ERROR] {json_error}")
+            log_with_timestamp(f"Raw data: {request.get_data()}")
+            return jsonify({"success": False, "message": "Invalid JSON data"}), 400
+            
+        log_with_timestamp(f"📦 Request Data: {json.dumps(data, indent=2)}")
+        
         if not data:
             log_with_timestamp("❌ [ERROR] No data provided")
             return jsonify({"success": False, "message": "No data provided"}), 400
@@ -1257,12 +1296,28 @@ def confirm_wasteking_booking():
         payment_link = payment_response['quote']['paymentLink']
         log_with_timestamp(f"✅ Payment link generated: {payment_link}")
 
+        # Store the payment link in the database for later SMS use
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO price_quotes 
+                (quote_id, booking_ref, postcode, service, price_data, created_at, status, customer_phone, payment_link) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                booking_ref, booking_ref, data.get('postcode', ''), 'confirmed',
+                json.dumps(payment_response), datetime.now().isoformat(),
+                'confirmed', data['customer_phone'], payment_link
+            ))
+            conn.commit()
+            conn.close()
+
         # 4. Send SMS
         sms_response = send_payment_sms(
             booking_ref=booking_ref,
             phone=data['customer_phone'],
             payment_link=payment_link,
-            amount=payment_response['quote']['price']
+            amount=str(payment_response['quote']['price'])
         )
         
         if not sms_response.get('success'):
@@ -1270,15 +1325,17 @@ def confirm_wasteking_booking():
             return jsonify({
                 "success": False,
                 "message": "Booking confirmed but SMS failed",
-                "payment_link": payment_link
+                "payment_link": payment_link,
+                "booking_ref": booking_ref
             }), 500
 
         log_with_timestamp("🎉 [SUCCESS] Booking fully processed")
         return jsonify({
             "success": True,
-            "message": "Booking confirmed and SMS sent",
+            "message": "Booking confirmed and SMS sent successfully",
             "booking_ref": booking_ref,
-            "payment_link": payment_link
+            "payment_link": payment_link,
+            "price": payment_response['quote']['price']
         })
 
     except Exception as e:
@@ -1289,8 +1346,6 @@ def confirm_wasteking_booking():
             "message": "System error during booking",
             "error": str(e)
         }), 500
-
-
 
 @app.route('/api/wasteking-get-price', methods=['POST'])
 def get_wasteking_price():
