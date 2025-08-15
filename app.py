@@ -1421,7 +1421,7 @@ def confirm_wasteking_booking():
                 booking_ref=booking_ref,
                 phone=normalized_data['customer_phone'],
                 payment_link=payment_link,
-                amount= str(price) # 🔥 FORCE £1 FOR TESTING
+                amount="1.00"  # 🔥 FORCE £1 FOR TESTING
             )
             
             if not sms_response.get('success'):
@@ -1506,7 +1506,7 @@ def confirm_wasteking_booking():
         }), 500
 
 
-@app.route('/api/wasteking-get-price', methods=['POST', 'GET'])
+@app.route('/api/wasteking-get-price', methods=['POST'])
 def get_wasteking_price():
     """Get price only - no booking created"""
     try:
@@ -1969,7 +1969,7 @@ def get_call_details(oid):
         return jsonify(call_details)
         
     except Exception as e:
-        log_error(f"Error getting call details for {oid}", e)
+        
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
@@ -1983,13 +1983,7 @@ if __name__ == '__main__':
     log_with_timestamp("  • TOOL 1: Original price check (unchanged)")
     log_with_timestamp("  • TOOL 2: NEW booking workflow (follows your images exactly)")
     log_with_timestamp("  • TOOL 3: Dynamic SMS payments (uses paymentLink from bookings)")
-    log_with_timestamp("  • ALL original functionality preserved:")
-    log_with_timestamp("    - Background call monitoring")
-    log_with_timestamp("    - Xelion API integration")
-    log_with_timestamp("    - Deepgram transcription")
-    log_with_timestamp("    - OpenAI Waste King analysis")
-    log_with_timestamp("    - Dashboard and reporting")
-    log_with_timestamp("    - Call quality scoring")
+
     
     port = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False)
