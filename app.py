@@ -1506,15 +1506,18 @@ def confirm_wasteking_booking():
         }), 500
 
 
+
 @app.route('/api/wasteking-get-price', methods=['POST', 'GET'])
 def get_wasteking_price():
     """Get price only - no booking created"""
     try:
         log_with_timestamp("="*80)
         log_with_timestamp("💰 [PRICE CHECK] INITIATED")
-        log_with_timestamp(f"📦 Request Data: {json.dumps(request.get_json(), indent=2)}")
         
-        data = request.get_json()
+        # Safe JSON handling
+        data = request.get_json() if request.is_json else request.form.to_dict()
+        log_with_timestamp(f"📦 Request Data: {json.dumps(data, indent=2) if data else 'No data'}")
+        
         if not data:
             log_with_timestamp("❌ [ERROR] No data provided")
             return jsonify({"success": False, "message": "No data provided"}), 400
@@ -1559,8 +1562,13 @@ def get_wasteking_price():
 
         log_with_timestamp(f"💵 Price data received: {json.dumps(price_data.get('quote', {}), indent=2)}")
         
-        # Get current date/time info
-        datetime_info = get_current_datetime_info()
+        # Get current date/time info directly
+        from datetime import datetime, timezone, timedelta
+        now_utc = datetime.now(timezone.utc)
+        current_date = now_utc.strftime("%Y-%m-%d")
+        current_time = now_utc.strftime("%H:%M")
+        current_day = now_utc.strftime("%A")
+        tomorrow_date = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
         
         # Format response for ElevenLabs with date/time context
         response = {
@@ -1570,20 +1578,19 @@ def get_wasteking_price():
             "service_price": price_data.get('quote', {}).get('servicePrice'),
             "message": f"The estimated price is £{price_data.get('quote', {}).get('price')} including VAT",
             
-            # 🔥 ADD SYSTEM DATE/TIME INFO FOR AI CONTEXT
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"], 
-            "system_day": datetime_info["current_day"],
-            "tomorrow_date": datetime_info["tomorrow_date"],
-            "current_datetime_utc": datetime_info["current_datetime_utc"],
-            "business_hours": datetime_info["uk_business_hours"],
+            # System date/time info for AI context
+            "system_date": current_date,
+            "system_time": current_time, 
+            "system_day": current_day,
+            "tomorrow_date": tomorrow_date,
+            "current_datetime_utc": now_utc.isoformat(),
             
             # Context for AI
             "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
+                "today_is": current_date,
+                "current_time": current_time,
+                "tomorrow_is": tomorrow_date,
+                "current_day": current_day
             }
         }
         
@@ -1593,11 +1600,33 @@ def get_wasteking_price():
     except Exception as e:
         log_with_timestamp(f"🔥 [UNHANDLED EXCEPTION] {str(e)}")
         log_with_timestamp(traceback.format_exc())
+        
+        # Get current date/time info for error response
+        from datetime import datetime, timezone, timedelta
+        now_utc = datetime.now(timezone.utc)
+        current_date = now_utc.strftime("%Y-%m-%d")
+        current_time = now_utc.strftime("%H:%M")
+        current_day = now_utc.strftime("%A")
+        tomorrow_date = (now_utc + timedelta(days=1)).strftime("%Y-%m-%d")
+        
         return jsonify({
             "success": False,
             "message": "Unable to get price right now",
-            "error": str(e)
+            "error": str(e),
+            
+            # Even on errors, provide date context for AI
+            "system_date": current_date,
+            "system_time": current_time,
+            "ai_context": {
+                "today_is": current_date,
+                "current_time": current_time,
+                "tomorrow_is": tomorrow_date,
+                "current_day": current_day
+            }
         }), 500
+
+
+
 # --- Dashboard and Call Management Routes ---
 @app.route('/get_dashboard_data')
 def get_dashboard_data():
