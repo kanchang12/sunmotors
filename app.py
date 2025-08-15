@@ -1395,7 +1395,7 @@ def confirm_wasteking_booking():
                 booking_ref=booking_ref,
                 phone=normalized_data['customer_phone'],
                 payment_link=payment_link,
-                amount=str(price)
+                amount="1.00"
             )
             
             if not sms_response.get('success'):
