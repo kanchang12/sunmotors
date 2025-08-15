@@ -837,7 +837,7 @@ def update_wasteking_booking(booking_ref: str, update_data: dict):
             verify=False
         )
         
-        if response.status_code == 200:
+        if response.status_code in [200, 201]:
             log_with_timestamp(f"✅ Updated booking {booking_ref} with: {json.dumps(update_data, indent=2)}")
             return response.json()
         else:
