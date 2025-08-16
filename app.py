@@ -819,7 +819,7 @@ def create_wasteking_booking():
             "Content-Type": "application/json"
         }
         
-        create_url = f"{WASTEKING_BASE_URL}api/booking/create/"
+        create_url = f"{WASTEKING_BASE_URL}api/booking/create"
         response = requests.post(
             create_url,
             headers=headers,
