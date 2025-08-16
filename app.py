@@ -1625,7 +1625,11 @@ def get_wasteking_price():
             }
         }), 500
 
-
+@app.route('/api/current-datetime', methods=['GET'])
+def get_current_datetime():
+    """Get current UK date and time for AI context"""
+    datetime_info = get_current_datetime_info()
+    return jsonify(datetime_info)
 
 # --- Dashboard and Call Management Routes ---
 @app.route('/get_dashboard_data')
