@@ -1244,7 +1244,7 @@ def test_endpoint():
         ]
     })
 
-@app.route('/api/wasteking-confirm-booking', methods=['POST'])
+@app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
 def confirm_wasteking_booking():
     """Confirm booking and send payment SMS - handles multiple field formats"""
     try:
