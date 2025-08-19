@@ -1294,10 +1294,10 @@ def confirm_wasteking_booking():
                     return jsonify({"success": False, "message": "Failed to get pricing"}), 500
                 log_with_timestamp(f"💰 Price search complete: £{price_response.get('quote', {}).get('price', 'N/A')}")
         
-        # Handle customer phone - multiple possible field names
-        normalized_data['customer_phone'] = (
-            data.get('customer_phone') or 
+        # ✅ FIXED: Handle phone - use 'phone' consistently
+        normalized_data['phone'] = (
             data.get('phone') or 
+            data.get('customer_phone') or 
             data.get('customerPhone') or
             data.get('Phone')
         )
@@ -1356,8 +1356,8 @@ def confirm_wasteking_booking():
         
         log_with_timestamp(f"🔧 Normalized data: {json.dumps(normalized_data, indent=2)}")
         
-        # Validate required fields after normalization
-        required = ['booking_ref', 'customer_phone']  # Relaxed requirements
+        # ✅ FIXED: Validate required fields after normalization - use 'phone' instead of 'customer_phone'
+        required = ['booking_ref', 'phone']  # Changed from 'customer_phone' to 'phone'
         missing = [field for field in required if not normalized_data.get(field)]
         if missing:
             log_with_timestamp(f"❌ [VALIDATION] Missing critical fields: {missing}")
@@ -1380,7 +1380,7 @@ def confirm_wasteking_booking():
                 "customer": {
                     "firstName": normalized_data['first_name'],
                     "lastName": normalized_data['last_name'],
-                    "phone": normalized_data['customer_phone'],
+                    "phone": normalized_data['phone'],  # ✅ FIXED: Use 'phone' field
                     "emailAddress": normalized_data.get('email', ''),
                     "addressPostcode": normalized_data.get('postcode', '')
                 }
@@ -1500,16 +1500,16 @@ def confirm_wasteking_booking():
             ''', (
                 booking_ref, booking_ref, normalized_data.get('postcode', ''), 'confirmed',
                 json.dumps(price_breakdown), datetime.now().isoformat(),
-                'confirmed', normalized_data['customer_phone'], payment_link
+                'confirmed', normalized_data['phone'], payment_link  # ✅ FIXED: Use 'phone' field
             ))
             conn.commit()
             conn.close()
 
         # 4. Send SMS with FINAL ADJUSTED PRICE
-        if normalized_data.get('customer_phone'):
+        if normalized_data.get('phone'):  # ✅ FIXED: Check 'phone' field
             sms_response = send_payment_sms(
                 booking_ref=booking_ref,
-                phone=normalized_data['customer_phone'],
+                phone=normalized_data['phone'],  # ✅ FIXED: Use 'phone' field
                 payment_link=payment_link,
                 amount=str(final_price)  # Use final adjusted price
             )
@@ -1569,7 +1569,7 @@ def confirm_wasteking_booking():
             "surcharge_details": surcharge_details,
             "discount_applied": discount_amount,
             "savings": discount_amount,
-            "customer_phone": normalized_data.get('customer_phone'),
+            "phone": normalized_data.get('phone'),  # ✅ FIXED: Use 'phone' field in response
             "customer_name": f"{normalized_data.get('first_name', 'Customer')} {normalized_data.get('last_name', 'Unknown')}",
             "service_date": normalized_data['service_date'],
             "date_was_auto_assigned": date_was_defaulted,
@@ -1943,8 +1943,8 @@ def send_payment_sms_endpoint():
                 "message": "No JSON data received"
             }), 400
 
-        # Validate required fields
-        required_fields = ['customer_phone', 'call_sid', 'amount']
+        # ✅ FIXED: Update required fields validation
+        required_fields = ['phone', 'call_sid', 'amount']  # Changed from 'customer_phone' to 'phone'
         missing_fields = [field for field in required_fields if not data.get(field)]
         if missing_fields:
             return jsonify({
@@ -1952,8 +1952,8 @@ def send_payment_sms_endpoint():
                 "message": f"Missing required fields: {', '.join(missing_fields)}"
             }), 400
 
-        # Clean and validate phone number
-        phone = data['customer_phone'].strip()
+        # ✅ FIXED: Clean and validate phone number using 'phone' field
+        phone = data['phone'].strip()  # Changed from 'customer_phone' to 'phone'
         if phone.startswith('0'):
             phone = f"+44{phone[1:]}"
         elif phone.startswith('44'):
