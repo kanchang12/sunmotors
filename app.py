@@ -876,7 +876,7 @@ def update_wasteking_booking(booking_ref: str, update_data: dict):
         return None
 
 def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: str):
-    """Send payment SMS via Twilio with adjusted amount"""
+    """Send payment SMS via Twilio"""
     try:
         # Clean and format phone number
         if phone.startswith('0'):
@@ -890,7 +890,7 @@ def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: st
             log_with_timestamp(f"❌ Invalid UK phone number format: {phone}")
             return {"success": False, "message": "Invalid UK phone number format"}
         
-        # Create SMS message with the final adjusted amount
+        # Create SMS message
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         message_body = f"""Waste King Payment
 Amount: £{amount}
@@ -908,7 +908,7 @@ Thank you!"""
             to=phone
         )
         
-        log_with_timestamp(f"✅ SMS sent to {phone} for booking {booking_ref} with final amount £{amount}. SID: {message.sid}")
+        log_with_timestamp(f"✅ SMS sent to {phone} for booking {booking_ref}. SID: {message.sid}")
         
         # Store in database
         with db_lock:
@@ -921,7 +921,7 @@ Thank you!"""
             ''', (
                 booking_ref,
                 phone,
-                float(amount),  # Use the final adjusted amount
+                float(amount.replace('£', '')),
                 message.sid,
                 datetime.now().isoformat(),
                 payment_link
@@ -1246,7 +1246,7 @@ def test_endpoint():
 
 @app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
 def confirm_wasteking_booking():
-    """Confirm booking and send payment SMS - handles discounts and surcharges"""
+    """Confirm booking and send payment SMS - handles multiple field formats"""
     try:
         log_with_timestamp("="*80)
         log_with_timestamp("📝 [BOOKING CONFIRMATION] INITIATED")
@@ -1294,38 +1294,30 @@ def confirm_wasteking_booking():
                     return jsonify({"success": False, "message": "Failed to get pricing"}), 500
                 log_with_timestamp(f"💰 Price search complete: £{price_response.get('quote', {}).get('price', 'N/A')}")
         
-        # ✅ FIXED: Handle phone - use 'phone' consistently
-        normalized_data['phone'] = (
-            data.get('phone') or 
+        # Handle customer phone - multiple possible field names
+        normalized_data['customer_phone'] = (
             data.get('customer_phone') or 
+            data.get('phone') or 
             data.get('customerPhone') or
             data.get('Phone')
         )
         
-        # Handle names - try different combinations, preserving original values
-        first_name_raw = (
-            data.get('firstName') or  # Try firstName first (as used in request)
+        # Handle names - try different combinations
+        normalized_data['first_name'] = (
             data.get('first_name') or 
+            data.get('firstName') or 
             data.get('firstname') or
-            data.get('name', '').split(' ')[0] if data.get('name') else None
+            data.get('name', '').split(' ')[0] if data.get('name') else 'Customer'
         )
         
-        last_name_raw = (
-            data.get('lastName') or   # Try lastName first (as used in request)
+        normalized_data['last_name'] = (
             data.get('last_name') or 
+            data.get('lastName') or 
             data.get('lastname') or
-            ' '.join(data.get('name', '').split(' ')[1:]) if data.get('name') and len(data.get('name', '').split(' ')) > 1 else None
+            ' '.join(data.get('name', '').split(' ')[1:]) if data.get('name') and len(data.get('name', '').split(' ')) > 1 else 'Unknown'
         )
         
-        # Set names or defaults
-        normalized_data['first_name'] = first_name_raw if first_name_raw else 'Customer'
-        normalized_data['last_name'] = last_name_raw if last_name_raw else 'Unknown'
-        
-        # Store raw names for validation
-        normalized_data['_first_name_raw'] = first_name_raw
-        normalized_data['_last_name_raw'] = last_name_raw
-        
-        # Handle service date - multiple possible field names, with default fallback
+        # Handle service date - multiple possible field names
         normalized_data['service_date'] = (
             data.get('service_date') or 
             data.get('date') or 
@@ -1333,31 +1325,16 @@ def confirm_wasteking_booking():
             data.get('delivery_date')
         )
         
-        # If no date provided, use tomorrow as default (WasteKing API requires a date for payment links)
-        if not normalized_data['service_date']:
-            from datetime import datetime, timedelta
-            tomorrow = datetime.now() + timedelta(days=1)
-            normalized_data['service_date'] = tomorrow.strftime('%Y-%m-%d')
-            log_with_timestamp(f"🗓️ No date provided, using default date: {normalized_data['service_date']}")
-        
         # Handle other optional fields
         normalized_data['service_time'] = data.get('service_time', data.get('time', 'am'))
         normalized_data['email'] = data.get('email', data.get('emailAddress', ''))
         normalized_data['postcode'] = data.get('postcode', data.get('postCode', ''))
         normalized_data['placement'] = data.get('placement', 'drive')
         
-        # 💰 NEW: Handle discount and surcharge fields
-        normalized_data['discount_applied'] = data.get('discount_applied', False)
-        normalized_data['extra_items'] = data.get('extra_items', [])
-        
-        # Convert extra_items to list if it's a string
-        if isinstance(normalized_data['extra_items'], str):
-            normalized_data['extra_items'] = [item.strip() for item in normalized_data['extra_items'].split(',') if item.strip()]
-        
         log_with_timestamp(f"🔧 Normalized data: {json.dumps(normalized_data, indent=2)}")
         
-        # ✅ FIXED: Validate required fields after normalization - use 'phone' instead of 'customer_phone'
-        required = ['booking_ref', 'phone']  # Changed from 'customer_phone' to 'phone'
+        # Validate required fields after normalization
+        required = ['booking_ref', 'customer_phone']  # Relaxed requirements
         missing = [field for field in required if not normalized_data.get(field)]
         if missing:
             log_with_timestamp(f"❌ [VALIDATION] Missing critical fields: {missing}")
@@ -1371,16 +1348,13 @@ def confirm_wasteking_booking():
         booking_ref = normalized_data['booking_ref']
         log_with_timestamp(f"🔍 Processing booking reference: {booking_ref}")
 
-        # 1. Add Customer Details (if we have real names, not defaults)
-        has_real_names = (normalized_data['_first_name_raw'] and normalized_data['_last_name_raw'] and 
-                         normalized_data['_first_name_raw'].strip() and normalized_data['_last_name_raw'].strip())
-        
-        if has_real_names:
+        # 1. Add Customer Details (only if we have names)
+        if normalized_data.get('first_name') and normalized_data.get('last_name'):
             customer_payload = {
                 "customer": {
                     "firstName": normalized_data['first_name'],
                     "lastName": normalized_data['last_name'],
-                    "phone": normalized_data['phone'],  # ✅ FIXED: Use 'phone' field
+                    "phone": normalized_data['customer_phone'],
                     "emailAddress": normalized_data.get('email', ''),
                     "addressPostcode": normalized_data.get('postcode', '')
                 }
@@ -1391,21 +1365,24 @@ def confirm_wasteking_booking():
                 log_with_timestamp("❌ [API FAILURE] Couldn't add customer details")
                 return jsonify({"success": False, "message": "Failed to add customer details"}), 500
         else:
-            log_with_timestamp("⚠️ Skipping customer details - using default names or missing information")
+            log_with_timestamp("⚠️ Skipping customer details - missing name information")
 
-        # 2. Add Service Details (always add since we now always have a date)
-        service_payload = {
-            "service": {
-                "date": normalized_data['service_date'],
-                "time": normalized_data.get('service_time', 'am'),
-                "placement": normalized_data.get('placement', 'drive')
+        # 2. Add Service Details (only if we have service date)
+        if normalized_data.get('service_date'):
+            service_payload = {
+                "service": {
+                    "date": normalized_data['service_date'],
+                    "time": normalized_data.get('service_time', 'am'),
+                    "placement": normalized_data.get('placement', 'drive')
+                }
             }
-        }
-        log_with_timestamp(f"📅 Adding service details: {json.dumps(service_payload, indent=2)}")
-        service_response = update_wasteking_booking(booking_ref, service_payload)
-        if not service_response:
-            log_with_timestamp("❌ [API FAILURE] Couldn't add service details")
-            return jsonify({"success": False, "message": "Failed to add service details"}), 500
+            log_with_timestamp(f"📅 Adding service details: {json.dumps(service_payload, indent=2)}")
+            service_response = update_wasteking_booking(booking_ref, service_payload)
+            if not service_response:
+                log_with_timestamp("❌ [API FAILURE] Couldn't add service details")
+                return jsonify({"success": False, "message": "Failed to add service details"}), 500
+        else:
+            log_with_timestamp("⚠️ Skipping service details - missing date information")
 
         # 3. Generate Payment Link
         payment_payload = {
@@ -1419,77 +1396,10 @@ def confirm_wasteking_booking():
             return jsonify({"success": False, "message": "Failed to generate payment link"}), 500
 
         payment_link = payment_response['quote']['paymentLink']
-        base_price = float(payment_response['quote'].get('price', '0'))
+        price = payment_response['quote'].get('price', '0')
         log_with_timestamp(f"✅ Payment link generated: {payment_link}")
-        log_with_timestamp(f"💰 Base price: £{base_price}")
 
-        # 💰 NEW: Calculate price adjustments
-        surcharge_total = 0.0
-        surcharge_details = []
-        discount_amount = 0.0
-        
-        # Define surcharge rates based on Waste King rules
-        surcharge_rates = {
-            'fridge': 20.0,
-            'freezer': 20.0,
-            'mattress': 15.0,
-            'sofa': 15.0,
-            'upholstered_furniture': 15.0,
-            'furniture': 15.0  # catchall for furniture
-        }
-        
-        # Calculate surcharges for extra items
-        if normalized_data['extra_items']:
-            log_with_timestamp(f"🧾 Processing extra items: {normalized_data['extra_items']}")
-            for item in normalized_data['extra_items']:
-                item_lower = item.lower().strip()
-                charge = 0.0
-                
-                # Match item to surcharge rates
-                if 'fridge' in item_lower:
-                    charge = surcharge_rates['fridge']
-                elif 'freezer' in item_lower:
-                    charge = surcharge_rates['freezer']
-                elif 'mattress' in item_lower:
-                    charge = surcharge_rates['mattress']
-                elif 'sofa' in item_lower or 'couch' in item_lower:
-                    charge = surcharge_rates['sofa']
-                elif 'furniture' in item_lower or 'chair' in item_lower:
-                    charge = surcharge_rates['upholstered_furniture']
-                
-                if charge > 0:
-                    surcharge_total += charge
-                    surcharge_details.append(f"{item}: £{charge}")
-                    log_with_timestamp(f"💰 Added surcharge for {item}: £{charge}")
-        
-        # Apply £10 discount if requested
-        if normalized_data['discount_applied']:
-            discount_amount = 10.0
-            log_with_timestamp(f"🎁 Applying £10 online booking discount")
-        
-        # Calculate final price
-        final_price = base_price + surcharge_total - discount_amount
-        
-        # Ensure price doesn't go below 0
-        if final_price < 0:
-            final_price = 0.0
-        
-        log_with_timestamp(f"💰 PRICE BREAKDOWN:")
-        log_with_timestamp(f"   Base price: £{base_price}")
-        log_with_timestamp(f"   Surcharges: £{surcharge_total} ({'; '.join(surcharge_details) if surcharge_details else 'None'})")
-        log_with_timestamp(f"   Discount: -£{discount_amount}")
-        log_with_timestamp(f"   FINAL PRICE: £{final_price}")
-
-        # Store the payment link and price breakdown in the database
-        price_breakdown = {
-            "base_price": base_price,
-            "surcharges": surcharge_total,
-            "surcharge_details": surcharge_details,
-            "discount": discount_amount,
-            "final_price": final_price,
-            "original_response": payment_response
-        }
-        
+        # Store the payment link in the database for later SMS use
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1499,19 +1409,19 @@ def confirm_wasteking_booking():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 booking_ref, booking_ref, normalized_data.get('postcode', ''), 'confirmed',
-                json.dumps(price_breakdown), datetime.now().isoformat(),
-                'confirmed', normalized_data['phone'], payment_link  # ✅ FIXED: Use 'phone' field
+                json.dumps(payment_response), datetime.now().isoformat(),
+                'confirmed', normalized_data['customer_phone'], payment_link
             ))
             conn.commit()
             conn.close()
 
-        # 4. Send SMS with FINAL ADJUSTED PRICE
-        if normalized_data.get('phone'):  # ✅ FIXED: Check 'phone' field
+        # 4. Send SMS (only if we have phone number) - FORCE £1 FOR TESTING
+        if normalized_data.get('customer_phone'):
             sms_response = send_payment_sms(
                 booking_ref=booking_ref,
-                phone=normalized_data['phone'],  # ✅ FIXED: Use 'phone' field
+                phone=normalized_data['customer_phone'],
                 payment_link=payment_link,
-                amount=str(final_price)  # Use final adjusted price
+                amount=str(price)  # 🔥 FORCE £1 FOR TESTING
             )
             
             if not sms_response.get('success'):
@@ -1523,11 +1433,7 @@ def confirm_wasteking_booking():
                     "message": "Booking confirmed but SMS failed",
                     "payment_link": payment_link,
                     "booking_ref": booking_ref,
-                    "original_price": base_price,
-                    "final_price": final_price,
-                    "surcharges": surcharge_total,
-                    "discount": discount_amount,
-                    "price_breakdown": price_breakdown,
+                    "price": price,
                     "sms_error": sms_response.get('message'),
                     
                     # Add date/time context even for partial success
@@ -1541,39 +1447,22 @@ def confirm_wasteking_booking():
                     }
                 })
             
-            log_with_timestamp("📱 SMS sent successfully with adjusted price")
+            log_with_timestamp("📱 SMS sent successfully")
         else:
             log_with_timestamp("⚠️ No phone number provided, skipping SMS")
 
         # Get current date/time info for successful response
         datetime_info = get_current_datetime_info()
 
-        log_with_timestamp("🎉 [SUCCESS] Booking fully processed with price adjustments")
-        
-        # Check if we used a default date
-        date_was_defaulted = not any([
-            data.get('service_date'), 
-            data.get('date'), 
-            data.get('serviceDate'), 
-            data.get('delivery_date')
-        ])
-        
+        log_with_timestamp("🎉 [SUCCESS] Booking fully processed")
         return jsonify({
             "success": True,
             "message": "Booking confirmed and SMS sent successfully",
             "booking_ref": booking_ref,
             "payment_link": payment_link,
-            "original_price": base_price,
-            "final_price": final_price,
-            "surcharges_total": surcharge_total,
-            "surcharge_details": surcharge_details,
-            "discount_applied": discount_amount,
-            "savings": discount_amount,
-            "phone": normalized_data.get('phone'),  # ✅ FIXED: Use 'phone' field in response
+            "price": price,
+            "customer_phone": normalized_data.get('customer_phone'),
             "customer_name": f"{normalized_data.get('first_name', 'Customer')} {normalized_data.get('last_name', 'Unknown')}",
-            "service_date": normalized_data['service_date'],
-            "date_was_auto_assigned": date_was_defaulted,
-            "price_breakdown": price_breakdown,
             
             # 🔥 ADD SYSTEM DATE/TIME INFO FOR AI CONTEXT
             "system_date": datetime_info["current_date"],
@@ -1615,6 +1504,7 @@ def confirm_wasteking_booking():
                 "current_day": datetime_info["current_day"]
             }
         }), 500
+
 
 
 @app.route('/api/wasteking-get-price', methods=['POST', 'GET'])
@@ -1943,8 +1833,8 @@ def send_payment_sms_endpoint():
                 "message": "No JSON data received"
             }), 400
 
-        # ✅ FIXED: Update required fields validation
-        required_fields = ['phone', 'call_sid', 'amount']  # Changed from 'customer_phone' to 'phone'
+        # Validate required fields
+        required_fields = ['customer_phone', 'call_sid', 'amount']
         missing_fields = [field for field in required_fields if not data.get(field)]
         if missing_fields:
             return jsonify({
@@ -1952,8 +1842,8 @@ def send_payment_sms_endpoint():
                 "message": f"Missing required fields: {', '.join(missing_fields)}"
             }), 400
 
-        # ✅ FIXED: Clean and validate phone number using 'phone' field
-        phone = data['phone'].strip()  # Changed from 'customer_phone' to 'phone'
+        # Clean and validate phone number
+        phone = data['customer_phone'].strip()
         if phone.startswith('0'):
             phone = f"+44{phone[1:]}"
         elif phone.startswith('44'):
@@ -1985,9 +1875,8 @@ def send_payment_sms_endpoint():
                 log_with_timestamp(f"⚠️ No dynamic payment link found for quote {quote_id}, using fallback PayPal")
             conn.close()
 
-        # Use the amount passed in the request (this will be the final adjusted amount)
-        amount = str(data['amount'])
-        log_with_timestamp(f"💰 Using final adjusted amount: £{amount}")
+        # Force £1 amount as specified
+        amount=str(price)
 
         # Send SMS via Twilio with DYNAMIC payment link
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -2033,7 +1922,7 @@ Thank you!"""
 
         return jsonify({
             "status": "success",
-            "message": f"SMS sent successfully with final amount",
+            "message": f"SMS sent successfully with dynamic payment link",
             "amount": f"£{amount}",
             "call_sid": data['call_sid'],
             "quote_id": quote_id,
@@ -2047,6 +1936,7 @@ Thank you!"""
             "message": "System error",
             "debug": str(e)
         }), 500
+
 
 @app.route('/get_call_details/<oid>')
 def get_call_details(oid):
