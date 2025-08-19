@@ -1302,28 +1302,43 @@ def confirm_wasteking_booking():
             data.get('Phone')
         )
         
-        # Handle names - try different combinations
-        normalized_data['first_name'] = (
+        # Handle names - try different combinations, preserving original values
+        first_name_raw = (
+            data.get('firstName') or  # Try firstName first (as used in request)
             data.get('first_name') or 
-            data.get('firstName') or 
             data.get('firstname') or
-            data.get('name', '').split(' ')[0] if data.get('name') else 'Customer'
+            data.get('name', '').split(' ')[0] if data.get('name') else None
         )
         
-        normalized_data['last_name'] = (
+        last_name_raw = (
+            data.get('lastName') or   # Try lastName first (as used in request)
             data.get('last_name') or 
-            data.get('lastName') or 
             data.get('lastname') or
-            ' '.join(data.get('name', '').split(' ')[1:]) if data.get('name') and len(data.get('name', '').split(' ')) > 1 else 'Unknown'
+            ' '.join(data.get('name', '').split(' ')[1:]) if data.get('name') and len(data.get('name', '').split(' ')) > 1 else None
         )
         
-        # Handle service date - multiple possible field names
+        # Set names or defaults
+        normalized_data['first_name'] = first_name_raw if first_name_raw else 'Customer'
+        normalized_data['last_name'] = last_name_raw if last_name_raw else 'Unknown'
+        
+        # Store raw names for validation
+        normalized_data['_first_name_raw'] = first_name_raw
+        normalized_data['_last_name_raw'] = last_name_raw
+        
+        # Handle service date - multiple possible field names, with default fallback
         normalized_data['service_date'] = (
             data.get('service_date') or 
             data.get('date') or 
             data.get('serviceDate') or
             data.get('delivery_date')
         )
+        
+        # If no date provided, use tomorrow as default (WasteKing API requires a date for payment links)
+        if not normalized_data['service_date']:
+            from datetime import datetime, timedelta
+            tomorrow = datetime.now() + timedelta(days=1)
+            normalized_data['service_date'] = tomorrow.strftime('%Y-%m-%d')
+            log_with_timestamp(f"🗓️ No date provided, using default date: {normalized_data['service_date']}")
         
         # Handle other optional fields
         normalized_data['service_time'] = data.get('service_time', data.get('time', 'am'))
@@ -1356,8 +1371,11 @@ def confirm_wasteking_booking():
         booking_ref = normalized_data['booking_ref']
         log_with_timestamp(f"🔍 Processing booking reference: {booking_ref}")
 
-        # 1. Add Customer Details (only if we have names)
-        if normalized_data.get('first_name') and normalized_data.get('last_name'):
+        # 1. Add Customer Details (if we have real names, not defaults)
+        has_real_names = (normalized_data['_first_name_raw'] and normalized_data['_last_name_raw'] and 
+                         normalized_data['_first_name_raw'].strip() and normalized_data['_last_name_raw'].strip())
+        
+        if has_real_names:
             customer_payload = {
                 "customer": {
                     "firstName": normalized_data['first_name'],
@@ -1373,24 +1391,21 @@ def confirm_wasteking_booking():
                 log_with_timestamp("❌ [API FAILURE] Couldn't add customer details")
                 return jsonify({"success": False, "message": "Failed to add customer details"}), 500
         else:
-            log_with_timestamp("⚠️ Skipping customer details - missing name information")
+            log_with_timestamp("⚠️ Skipping customer details - using default names or missing information")
 
-        # 2. Add Service Details (only if we have service date)
-        if normalized_data.get('service_date'):
-            service_payload = {
-                "service": {
-                    "date": normalized_data['service_date'],
-                    "time": normalized_data.get('service_time', 'am'),
-                    "placement": normalized_data.get('placement', 'drive')
-                }
+        # 2. Add Service Details (always add since we now always have a date)
+        service_payload = {
+            "service": {
+                "date": normalized_data['service_date'],
+                "time": normalized_data.get('service_time', 'am'),
+                "placement": normalized_data.get('placement', 'drive')
             }
-            log_with_timestamp(f"📅 Adding service details: {json.dumps(service_payload, indent=2)}")
-            service_response = update_wasteking_booking(booking_ref, service_payload)
-            if not service_response:
-                log_with_timestamp("❌ [API FAILURE] Couldn't add service details")
-                return jsonify({"success": False, "message": "Failed to add service details"}), 500
-        else:
-            log_with_timestamp("⚠️ Skipping service details - missing date information")
+        }
+        log_with_timestamp(f"📅 Adding service details: {json.dumps(service_payload, indent=2)}")
+        service_response = update_wasteking_booking(booking_ref, service_payload)
+        if not service_response:
+            log_with_timestamp("❌ [API FAILURE] Couldn't add service details")
+            return jsonify({"success": False, "message": "Failed to add service details"}), 500
 
         # 3. Generate Payment Link
         payment_payload = {
@@ -1534,6 +1549,15 @@ def confirm_wasteking_booking():
         datetime_info = get_current_datetime_info()
 
         log_with_timestamp("🎉 [SUCCESS] Booking fully processed with price adjustments")
+        
+        # Check if we used a default date
+        date_was_defaulted = not any([
+            data.get('service_date'), 
+            data.get('date'), 
+            data.get('serviceDate'), 
+            data.get('delivery_date')
+        ])
+        
         return jsonify({
             "success": True,
             "message": "Booking confirmed and SMS sent successfully",
@@ -1547,6 +1571,8 @@ def confirm_wasteking_booking():
             "savings": discount_amount,
             "customer_phone": normalized_data.get('customer_phone'),
             "customer_name": f"{normalized_data.get('first_name', 'Customer')} {normalized_data.get('last_name', 'Unknown')}",
+            "service_date": normalized_data['service_date'],
+            "date_was_auto_assigned": date_was_defaulted,
             "price_breakdown": price_breakdown,
             
             # 🔥 ADD SYSTEM DATE/TIME INFO FOR AI CONTEXT
@@ -1589,7 +1615,6 @@ def confirm_wasteking_booking():
                 "current_day": datetime_info["current_day"]
             }
         }), 500
-
 
 
 @app.route('/api/wasteking-get-price', methods=['POST', 'GET'])
