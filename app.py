@@ -876,7 +876,7 @@ def update_wasteking_booking(booking_ref: str, update_data: dict):
         return None
 
 def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: str):
-    """Send payment SMS via Twilio"""
+    """Send payment SMS via Twilio with adjusted amount"""
     try:
         # Clean and format phone number
         if phone.startswith('0'):
@@ -890,7 +890,7 @@ def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: st
             log_with_timestamp(f"❌ Invalid UK phone number format: {phone}")
             return {"success": False, "message": "Invalid UK phone number format"}
         
-        # Create SMS message
+        # Create SMS message with the final adjusted amount
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         message_body = f"""Waste King Payment
 Amount: £{amount}
@@ -908,7 +908,7 @@ Thank you!"""
             to=phone
         )
         
-        log_with_timestamp(f"✅ SMS sent to {phone} for booking {booking_ref}. SID: {message.sid}")
+        log_with_timestamp(f"✅ SMS sent to {phone} for booking {booking_ref} with final amount £{amount}. SID: {message.sid}")
         
         # Store in database
         with db_lock:
@@ -921,7 +921,7 @@ Thank you!"""
             ''', (
                 booking_ref,
                 phone,
-                float(amount.replace('£', '')),
+                float(amount),  # Use the final adjusted amount
                 message.sid,
                 datetime.now().isoformat(),
                 payment_link
@@ -1246,7 +1246,7 @@ def test_endpoint():
 
 @app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
 def confirm_wasteking_booking():
-    """Confirm booking and send payment SMS - handles multiple field formats"""
+    """Confirm booking and send payment SMS - handles discounts and surcharges"""
     try:
         log_with_timestamp("="*80)
         log_with_timestamp("📝 [BOOKING CONFIRMATION] INITIATED")
@@ -1331,6 +1331,14 @@ def confirm_wasteking_booking():
         normalized_data['postcode'] = data.get('postcode', data.get('postCode', ''))
         normalized_data['placement'] = data.get('placement', 'drive')
         
+        # 💰 NEW: Handle discount and surcharge fields
+        normalized_data['discount_applied'] = data.get('discount_applied', False)
+        normalized_data['extra_items'] = data.get('extra_items', [])
+        
+        # Convert extra_items to list if it's a string
+        if isinstance(normalized_data['extra_items'], str):
+            normalized_data['extra_items'] = [item.strip() for item in normalized_data['extra_items'].split(',') if item.strip()]
+        
         log_with_timestamp(f"🔧 Normalized data: {json.dumps(normalized_data, indent=2)}")
         
         # Validate required fields after normalization
@@ -1396,10 +1404,77 @@ def confirm_wasteking_booking():
             return jsonify({"success": False, "message": "Failed to generate payment link"}), 500
 
         payment_link = payment_response['quote']['paymentLink']
-        price = payment_response['quote'].get('price', '0')
+        base_price = float(payment_response['quote'].get('price', '0'))
         log_with_timestamp(f"✅ Payment link generated: {payment_link}")
+        log_with_timestamp(f"💰 Base price: £{base_price}")
 
-        # Store the payment link in the database for later SMS use
+        # 💰 NEW: Calculate price adjustments
+        surcharge_total = 0.0
+        surcharge_details = []
+        discount_amount = 0.0
+        
+        # Define surcharge rates based on Waste King rules
+        surcharge_rates = {
+            'fridge': 20.0,
+            'freezer': 20.0,
+            'mattress': 15.0,
+            'sofa': 15.0,
+            'upholstered_furniture': 15.0,
+            'furniture': 15.0  # catchall for furniture
+        }
+        
+        # Calculate surcharges for extra items
+        if normalized_data['extra_items']:
+            log_with_timestamp(f"🧾 Processing extra items: {normalized_data['extra_items']}")
+            for item in normalized_data['extra_items']:
+                item_lower = item.lower().strip()
+                charge = 0.0
+                
+                # Match item to surcharge rates
+                if 'fridge' in item_lower:
+                    charge = surcharge_rates['fridge']
+                elif 'freezer' in item_lower:
+                    charge = surcharge_rates['freezer']
+                elif 'mattress' in item_lower:
+                    charge = surcharge_rates['mattress']
+                elif 'sofa' in item_lower or 'couch' in item_lower:
+                    charge = surcharge_rates['sofa']
+                elif 'furniture' in item_lower or 'chair' in item_lower:
+                    charge = surcharge_rates['upholstered_furniture']
+                
+                if charge > 0:
+                    surcharge_total += charge
+                    surcharge_details.append(f"{item}: £{charge}")
+                    log_with_timestamp(f"💰 Added surcharge for {item}: £{charge}")
+        
+        # Apply £10 discount if requested
+        if normalized_data['discount_applied']:
+            discount_amount = 10.0
+            log_with_timestamp(f"🎁 Applying £10 online booking discount")
+        
+        # Calculate final price
+        final_price = base_price + surcharge_total - discount_amount
+        
+        # Ensure price doesn't go below 0
+        if final_price < 0:
+            final_price = 0.0
+        
+        log_with_timestamp(f"💰 PRICE BREAKDOWN:")
+        log_with_timestamp(f"   Base price: £{base_price}")
+        log_with_timestamp(f"   Surcharges: £{surcharge_total} ({'; '.join(surcharge_details) if surcharge_details else 'None'})")
+        log_with_timestamp(f"   Discount: -£{discount_amount}")
+        log_with_timestamp(f"   FINAL PRICE: £{final_price}")
+
+        # Store the payment link and price breakdown in the database
+        price_breakdown = {
+            "base_price": base_price,
+            "surcharges": surcharge_total,
+            "surcharge_details": surcharge_details,
+            "discount": discount_amount,
+            "final_price": final_price,
+            "original_response": payment_response
+        }
+        
         with db_lock:
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -1409,19 +1484,19 @@ def confirm_wasteking_booking():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 booking_ref, booking_ref, normalized_data.get('postcode', ''), 'confirmed',
-                json.dumps(payment_response), datetime.now().isoformat(),
+                json.dumps(price_breakdown), datetime.now().isoformat(),
                 'confirmed', normalized_data['customer_phone'], payment_link
             ))
             conn.commit()
             conn.close()
 
-        # 4. Send SMS (only if we have phone number) - FORCE £1 FOR TESTING
+        # 4. Send SMS with FINAL ADJUSTED PRICE
         if normalized_data.get('customer_phone'):
             sms_response = send_payment_sms(
                 booking_ref=booking_ref,
                 phone=normalized_data['customer_phone'],
                 payment_link=payment_link,
-                amount=str(price)  # 🔥 FORCE £1 FOR TESTING
+                amount=str(final_price)  # Use final adjusted price
             )
             
             if not sms_response.get('success'):
@@ -1433,7 +1508,11 @@ def confirm_wasteking_booking():
                     "message": "Booking confirmed but SMS failed",
                     "payment_link": payment_link,
                     "booking_ref": booking_ref,
-                    "price": price,
+                    "original_price": base_price,
+                    "final_price": final_price,
+                    "surcharges": surcharge_total,
+                    "discount": discount_amount,
+                    "price_breakdown": price_breakdown,
                     "sms_error": sms_response.get('message'),
                     
                     # Add date/time context even for partial success
@@ -1447,22 +1526,28 @@ def confirm_wasteking_booking():
                     }
                 })
             
-            log_with_timestamp("📱 SMS sent successfully")
+            log_with_timestamp("📱 SMS sent successfully with adjusted price")
         else:
             log_with_timestamp("⚠️ No phone number provided, skipping SMS")
 
         # Get current date/time info for successful response
         datetime_info = get_current_datetime_info()
 
-        log_with_timestamp("🎉 [SUCCESS] Booking fully processed")
+        log_with_timestamp("🎉 [SUCCESS] Booking fully processed with price adjustments")
         return jsonify({
             "success": True,
             "message": "Booking confirmed and SMS sent successfully",
             "booking_ref": booking_ref,
             "payment_link": payment_link,
-            "price": price,
+            "original_price": base_price,
+            "final_price": final_price,
+            "surcharges_total": surcharge_total,
+            "surcharge_details": surcharge_details,
+            "discount_applied": discount_amount,
+            "savings": discount_amount,
             "customer_phone": normalized_data.get('customer_phone'),
             "customer_name": f"{normalized_data.get('first_name', 'Customer')} {normalized_data.get('last_name', 'Unknown')}",
+            "price_breakdown": price_breakdown,
             
             # 🔥 ADD SYSTEM DATE/TIME INFO FOR AI CONTEXT
             "system_date": datetime_info["current_date"],
@@ -1875,8 +1960,9 @@ def send_payment_sms_endpoint():
                 log_with_timestamp(f"⚠️ No dynamic payment link found for quote {quote_id}, using fallback PayPal")
             conn.close()
 
-        # Force £1 amount as specified
-        amount=str(price)
+        # Use the amount passed in the request (this will be the final adjusted amount)
+        amount = str(data['amount'])
+        log_with_timestamp(f"💰 Using final adjusted amount: £{amount}")
 
         # Send SMS via Twilio with DYNAMIC payment link
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -1922,7 +2008,7 @@ Thank you!"""
 
         return jsonify({
             "status": "success",
-            "message": f"SMS sent successfully with dynamic payment link",
+            "message": f"SMS sent successfully with final amount",
             "amount": f"£{amount}",
             "call_sid": data['call_sid'],
             "quote_id": quote_id,
@@ -1936,7 +2022,6 @@ Thank you!"""
             "message": "System error",
             "debug": str(e)
         }), 500
-
 
 @app.route('/get_call_details/<oid>')
 def get_call_details(oid):
