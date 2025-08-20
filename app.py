@@ -59,7 +59,7 @@ TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', 'your_twilio_phone_number
 SERVER_BASE_URL = "https://internal-porpoise-onewebonly-1b44fcb9.koyeb.app"
 
 # Supplier phone numbers
-TEST_SUPPLIER_PHONE = "+447761577001"  # Always use this for testing calls
+TEST_SUPPLIER_PHONE = "+447700000000"  # Always use this for testing calls
 # Real supplier numbers will be fetched from SMP API via wastekingmarketplace tool
 
 # PayPal payment link (fallback only)
