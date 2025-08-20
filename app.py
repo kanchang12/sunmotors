@@ -542,7 +542,203 @@ def wasteking_marketplace():
             return jsonify({
                 "success": False,
                 "message": "Failed to create booking reference"
-    @app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
+            }), 500
+
+        # Search payload for WasteKing API
+        search_payload = {
+            "search": {
+                "postCode": data['postcode'],
+                "service": data['service'],
+                "type": data['type']
+            }
+        }
+        
+        # Add date if provided for availability checking
+        if data.get('date'):
+            search_payload["search"]["date"] = data['date']
+            log_with_timestamp(f"🗓️ Including date in search: {data['date']}")
+        
+        log_with_timestamp(f"🔍 Marketplace search: {json.dumps(search_payload, indent=2)}")
+        
+        # Get pricing/supplier info from WasteKing SMP API
+        response_data = update_wasteking_booking(booking_ref, search_payload)
+        if not response_data:
+            return jsonify({
+                "success": False,
+                "message": "No pricing/supplier data returned from SMP"
+            }), 404
+
+        quote_data = response_data.get('quote', {})
+        price = quote_data.get('price', '0')
+        service_price = quote_data.get('servicePrice', '0')
+        
+        # FETCH REAL SUPPLIER PHONE FROM SMP RESPONSE
+        supplier_phone = quote_data.get('supplierPhone') or quote_data.get('supplier_phone') or "+447700900000"
+        supplier_name = quote_data.get('supplierName') or quote_data.get('supplier_name') or "Default Supplier"
+        
+        log_with_timestamp(f"📞 Real supplier from SMP: {supplier_name} - {supplier_phone}")
+        
+        # Get current date/time info
+        datetime_info = get_current_datetime_info()
+        
+        log_with_timestamp(f"💰 Marketplace result: £{price}, Supplier: {supplier_phone}")
+        
+        return jsonify({
+            "success": True,
+            "booking_ref": booking_ref,
+            "price": price,
+            "service_price": service_price,
+            "real_supplier_phone": supplier_phone,  # REAL number from SMP for AI to know
+            "supplier_name": supplier_name,
+            "postcode": data['postcode'],
+            "service": data['service'],
+            "type": data['type'],
+            "requested_date": data.get('date'),
+            "quote_data": quote_data,
+            
+            # System date/time info for AI context
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"],
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"],
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"]
+            }
+        })
+        
+    except Exception as e:
+        log_error("Marketplace request failed", e)
+        
+        # Get current date/time info for error response
+        datetime_info = get_current_datetime_info()
+        
+        return jsonify({
+            "success": False,
+            "message": "Marketplace request failed",
+            "error": str(e),
+            
+            # Even on errors, provide date context
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"],
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"],
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"]
+            }
+        }), 500
+
+@app.route('/api/call-supplier', methods=['POST'])
+def call_supplier():
+    """Call supplier availability - matches existing ElevenLabs webhook tool schema"""
+    try:
+        log_with_timestamp("="*50)
+        log_with_timestamp("📞 SUPPLIER AVAILABILITY CALL")
+        log_with_timestamp("="*50)
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "message": "No data provided"
+            }), 400
+
+        # Extract from ElevenLabs webhook schema
+        service = data.get('service')
+        type_size = data.get('type') 
+        postcode = data.get('postcode')
+        requested_date = data.get('requested_date')
+        
+        log_with_timestamp(f"📦 Supplier call request: {json.dumps(data, indent=2)}")
+        
+        if not all([service, postcode, requested_date]):
+            return jsonify({
+                "success": False,
+                "message": "Missing required fields: service, postcode, requested_date"
+            }), 400
+
+        # First get real supplier from SMP via marketplace
+        log_with_timestamp("🔍 Getting real supplier from SMP first...")
+        
+        # Create booking to get supplier info
+        booking_ref = create_wasteking_booking()
+        real_supplier_phone = "+447700900000"  # default
+        supplier_name = "Default Supplier"
+        
+        if booking_ref:
+            search_payload = {
+                "search": {
+                    "postCode": postcode,
+                    "service": service,
+                    "type": type_size or "8yd"
+                }
+            }
+            
+            response_data = update_wasteking_booking(booking_ref, search_payload)
+            if response_data:
+                quote_data = response_data.get('quote', {})
+                real_supplier_phone = quote_data.get('supplierPhone') or quote_data.get('supplier_phone') or "+447700900000"
+                supplier_name = quote_data.get('supplierName') or quote_data.get('supplier_name') or "Default Supplier"
+                log_with_timestamp(f"📞 Real supplier from SMP: {supplier_name} - {real_supplier_phone}")
+        
+        log_with_timestamp(f"📞 Real supplier: {real_supplier_phone}")
+        log_with_timestamp(f"📞 Actually calling test number: {TEST_SUPPLIER_PHONE}")
+        log_with_timestamp(f"📞 Checking availability for {service} on {requested_date}")
+        
+        # Make the call - passing real supplier but calling test number
+        call_result = make_supplier_call(real_supplier_phone, requested_date, service, postcode)
+        
+        # Get current date/time info
+        datetime_info = get_current_datetime_info()
+        
+        return jsonify({
+            "success": True,
+            "real_supplier_phone": real_supplier_phone,
+            "supplier_name": supplier_name,
+            "test_number_called": TEST_SUPPLIER_PHONE,
+            "service": service,
+            "type": type_size,
+            "postcode": postcode,
+            "requested_date": requested_date,
+            "available": call_result.get("available", False),
+            "supplier_response": call_result.get("message", "No response"),
+            "call_sid": call_result.get("call_sid"),
+            
+            # System date/time info for AI context
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"],
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"],
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"]
+            }
+        })
+        
+    except Exception as e:
+        log_error("Supplier availability call failed", e)
+        
+        # Get current date/time info for error response
+        datetime_info = get_current_datetime_info()
+        
+        return jsonify({
+            "success": False,
+            "message": "Supplier availability call failed",
+            "error": str(e),
+            
+            # Even on errors, provide date context
+            "system_date": datetime_info["current_date"],
+            "system_time": datetime_info["current_time"],
+            "ai_context": {
+                "today_is": datetime_info["current_date"],
+                "current_time": datetime_info["current_time"],
+                "tomorrow_is": datetime_info["tomorrow_date"],
+                "current_day": datetime_info["current_day"]
+            }
+        }), 500
+
+@app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
 def confirm_wasteking_booking():
     """Confirm booking and send payment SMS - handles discounts and surcharges"""
     try:
@@ -754,174 +950,7 @@ def send_payment_sms_endpoint():
         elif phone.startswith('44'):
             phone = f"+{phone}"
         
-        if not re.match(r'^\+44\d{9,10}
-
-        # Search payload for WasteKing API
-        search_payload = {
-            "search": {
-                "postCode": data['postcode'],
-                "service": data['service'],
-                "type": data['type']
-            }
-        }
-        
-        # Add date if provided for availability checking
-        if data.get('date'):
-            search_payload["search"]["date"] = data['date']
-            log_with_timestamp(f"🗓️ Including date in search: {data['date']}")
-        
-        log_with_timestamp(f"🔍 Marketplace search: {json.dumps(search_payload, indent=2)}")
-        
-        # Get pricing/supplier info from WasteKing SMP API
-        response_data = update_wasteking_booking(booking_ref, search_payload)
-        if not response_data:
-            return jsonify({
-                "success": False,
-                "message": "No pricing/supplier data returned from SMP"
-            }), 404
-
-        quote_data = response_data.get('quote', {})
-        price = quote_data.get('price', '0')
-        service_price = quote_data.get('servicePrice', '0')
-        
-        # FETCH REAL SUPPLIER PHONE FROM SMP RESPONSE
-        supplier_phone = quote_data.get('supplierPhone') or quote_data.get('supplier_phone') or "+447700900000"
-        supplier_name = quote_data.get('supplierName') or quote_data.get('supplier_name') or "Default Supplier"
-        
-        log_with_timestamp(f"📞 Real supplier from SMP: {supplier_name} - {supplier_phone}")
-        
-        # Get current date/time info
-        datetime_info = get_current_datetime_info()
-        
-        log_with_timestamp(f"💰 Marketplace result: £{price}, Supplier: {supplier_phone}")
-        
-        return jsonify({
-            "success": True,
-            "booking_ref": booking_ref,
-            "price": price,
-            "service_price": service_price,
-            "real_supplier_phone": supplier_phone,  # REAL number from SMP
-            "supplier_name": supplier_name,
-            "postcode": data['postcode'],
-            "service": data['service'],
-            "type": data['type'],
-            "requested_date": data.get('date'),
-            "quote_data": quote_data,
-            
-            # System date/time info for AI context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        })
-        
-    except Exception as e:
-        log_error("Marketplace request failed", e)
-        
-        # Get current date/time info for error response
-        datetime_info = get_current_datetime_info()
-        
-        return jsonify({
-            "success": False,
-            "message": "Marketplace request failed",
-            "error": str(e),
-            
-            # Even on errors, provide date context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        }), 500
-
-@app.route('/api/call-supplier', methods=['POST', 'GET"])
-def check_supplier_availability():
-    """Make phone call to supplier - gets real number from previous marketplace call but calls test number"""
-    try:
-        log_with_timestamp("="*50)
-        log_with_timestamp("📞 SUPPLIER AVAILABILITY CHECK")
-        log_with_timestamp("="*50)
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                "success": False,
-                "message": "No data provided"
-            }), 400
-
-        # Required fields
-        required = ['real_supplier_phone', 'date', 'service', 'postcode']
-        missing = [field for field in required if not data.get(field)]
-        if missing:
-            return jsonify({
-                "success": False,
-                "message": f"Missing required fields: {', '.join(missing)}"
-            }), 400
-
-        real_supplier_phone = data['real_supplier_phone']
-        date = data['date']
-        service = data['service']
-        postcode = data['postcode']
-        
-        log_with_timestamp(f"📞 Checking availability with real supplier: {real_supplier_phone}")
-        log_with_timestamp(f"📞 But calling test number: {TEST_SUPPLIER_PHONE}")
-        
-        # Make the call - passing real supplier but calling test number
-        call_result = make_supplier_call(real_supplier_phone, date, service, postcode)
-        
-        # Get current date/time info
-        datetime_info = get_current_datetime_info()
-        
-        return jsonify({
-            "success": True,
-            "real_supplier_phone": real_supplier_phone,
-            "test_number_called": TEST_SUPPLIER_PHONE,
-            "requested_date": date,
-            "service": service,
-            "postcode": postcode,
-            "available": call_result.get("available", False),
-            "supplier_response": call_result.get("message", "No response"),
-            "call_sid": call_result.get("call_sid"),
-            
-            # System date/time info for AI context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        })
-        
-    except Exception as e:
-        log_error("Supplier availability check failed", e)
-        
-        # Get current date/time info for error response
-        datetime_info = get_current_datetime_info()
-        
-        return jsonify({
-            "success": False,
-            "message": "Supplier availability check failed",
-            "error": str(e),
-            
-            # Even on errors, provide date context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        }), 500, phone):
+        if not re.match(r'^\+44\d{9,10}$', phone):
             return jsonify({
                 "status": "error",
                 "message": "Invalid UK phone number format",
@@ -998,10 +1027,11 @@ def get_status():
         "message": "WasteKing AI Voice Agent API is operational",
         "test_supplier_phone": TEST_SUPPLIER_PHONE,
         "real_suppliers_from": "SMP API via wastekingmarketplace tool",
+        "supplier_calls_via": "/api/call-supplier endpoint",
         "endpoints": {
             "current_datetime": "/api/current-datetime",
             "marketplace": "/api/wasteking-marketplace",
-            "supplier_check": "/api/check-supplier-availability", 
+            "supplier_availability": "/api/call-supplier", 
             "confirm_booking": "/api/wasteking-confirm-booking",
             "send_sms": "/api/send-payment-sms"
         }
@@ -1010,170 +1040,3 @@ def get_status():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host='0.0.0.0', port=port, use_reloader=False)
-
-        # Search payload for WasteKing API
-        search_payload = {
-            "search": {
-                "postCode": data['postcode'],
-                "service": data['service'],
-                "type": data['type']
-            }
-        }
-        
-        # Add date if provided for availability checking
-        if data.get('date'):
-            search_payload["search"]["date"] = data['date']
-            log_with_timestamp(f"🗓️ Including date in search: {data['date']}")
-        
-        log_with_timestamp(f"🔍 Marketplace search: {json.dumps(search_payload, indent=2)}")
-        
-        # Get pricing/supplier info from WasteKing SMP API
-        response_data = update_wasteking_booking(booking_ref, search_payload)
-        if not response_data:
-            return jsonify({
-                "success": False,
-                "message": "No pricing/supplier data returned from SMP"
-            }), 404
-
-        quote_data = response_data.get('quote', {})
-        price = quote_data.get('price', '0')
-        service_price = quote_data.get('servicePrice', '0')
-        
-        # FETCH REAL SUPPLIER PHONE FROM SMP RESPONSE
-        supplier_phone = quote_data.get('supplierPhone') or quote_data.get('supplier_phone') or "+447700900000"
-        supplier_name = quote_data.get('supplierName') or quote_data.get('supplier_name') or "Default Supplier"
-        
-        log_with_timestamp(f"📞 Real supplier from SMP: {supplier_name} - {supplier_phone}")
-        
-        # Get current date/time info
-        datetime_info = get_current_datetime_info()
-        
-        log_with_timestamp(f"💰 Marketplace result: £{price}, Supplier: {supplier_phone}")
-        
-        return jsonify({
-            "success": True,
-            "booking_ref": booking_ref,
-            "price": price,
-            "service_price": service_price,
-            "real_supplier_phone": supplier_phone,  # REAL number from SMP
-            "supplier_name": supplier_name,
-            "postcode": data['postcode'],
-            "service": data['service'],
-            "type": data['type'],
-            "requested_date": data.get('date'),
-            "quote_data": quote_data,
-            
-            # System date/time info for AI context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        })
-        
-    except Exception as e:
-        log_error("Marketplace request failed", e)
-        
-        # Get current date/time info for error response
-        datetime_info = get_current_datetime_info()
-        
-        return jsonify({
-            "success": False,
-            "message": "Marketplace request failed",
-            "error": str(e),
-            
-            # Even on errors, provide date context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        }), 500
-
-@app.route('/api/check-supplier-availability', methods=['POST'])
-def check_supplier_availability():
-    """Make phone call to supplier - gets real number from previous marketplace call but calls test number"""
-    try:
-        log_with_timestamp("="*50)
-        log_with_timestamp("📞 SUPPLIER AVAILABILITY CHECK")
-        log_with_timestamp("="*50)
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                "success": False,
-                "message": "No data provided"
-            }), 400
-
-        # Required fields
-        required = ['real_supplier_phone', 'date', 'service', 'postcode']
-        missing = [field for field in required if not data.get(field)]
-        if missing:
-            return jsonify({
-                "success": False,
-                "message": f"Missing required fields: {', '.join(missing)}"
-            }), 400
-
-        real_supplier_phone = data['real_supplier_phone']
-        date = data['date']
-        service = data['service']
-        postcode = data['postcode']
-        
-        log_with_timestamp(f"📞 Checking availability with real supplier: {real_supplier_phone}")
-        log_with_timestamp(f"📞 But calling test number: {TEST_SUPPLIER_PHONE}")
-        
-        # Make the call - passing real supplier but calling test number
-        call_result = make_supplier_call(real_supplier_phone, date, service, postcode)
-        
-        # Get current date/time info
-        datetime_info = get_current_datetime_info()
-        
-        return jsonify({
-            "success": True,
-            "real_supplier_phone": real_supplier_phone,
-            "test_number_called": TEST_SUPPLIER_PHONE,
-            "requested_date": date,
-            "service": service,
-            "postcode": postcode,
-            "available": call_result.get("available", False),
-            "supplier_response": call_result.get("message", "No response"),
-            "call_sid": call_result.get("call_sid"),
-            
-            # System date/time info for AI context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        })
-        
-    except Exception as e:
-        log_error("Supplier availability check failed", e)
-        
-        # Get current date/time info for error response
-        datetime_info = get_current_datetime_info()
-        
-        return jsonify({
-            "success": False,
-            "message": "Supplier availability check failed",
-            "error": str(e),
-            
-            # Even on errors, provide date context
-            "system_date": datetime_info["current_date"],
-            "system_time": datetime_info["current_time"],
-            "ai_context": {
-                "today_is": datetime_info["current_date"],
-                "current_time": datetime_info["current_time"],
-                "tomorrow_is": datetime_info["tomorrow_date"],
-                "current_day": datetime_info["current_day"]
-            }
-        }), 500
