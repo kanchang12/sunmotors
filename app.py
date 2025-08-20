@@ -267,7 +267,7 @@ def wasteking_marketplace():
 
         quote_data = response_data.get('quote', {})
         price = quote_data.get('price', '0')
-        supplier_phone = quote_data.get('supplierPhone', "+447700900000")
+        supplier_phone = quote_data.get('supplierPhone', "+447823656907")
         supplier_name = quote_data.get('supplierName', "Default Supplier")
         
         datetime_info = get_current_datetime_info()
