@@ -229,7 +229,7 @@ def get_current_datetime():
     """Get current date/time"""
     return jsonify(get_current_datetime_info())
 
-@app.route('/api/wasteking-get-price', methods=['POST'])
+@app.route('/api/wasteking-get-price', methods=['POST', 'GET'])
 def wasteking_marketplace():
     """Get pricing and supplier info"""
     try:
@@ -292,7 +292,7 @@ def wasteking_marketplace():
             "error": str(e)
         }), 500
 
-@app.route('/api/call-supplier', methods=['POST'])
+@app.route('/api/call-supplier', methods=['POST', 'GET'])
 def call_supplier():
     """Mock supplier call"""
     try:
@@ -338,7 +338,7 @@ def call_supplier():
             "error": str(e)
         }), 500
 
-@app.route('/api/wasteking-confirm-booking', methods=['POST'])
+@app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
 def confirm_wasteking_booking():
     """Confirm booking and send SMS"""
     try:
@@ -395,7 +395,7 @@ def confirm_wasteking_booking():
             "error": str(e)
         }), 500
 
-@app.route('/api/send-payment-sms', methods=['POST'])
+@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
 def send_payment_sms_endpoint():
     """Send payment SMS"""
     try:
