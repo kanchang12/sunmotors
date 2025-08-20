@@ -428,7 +428,7 @@ def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: st
         elif not phone.startswith('+'):
             phone = f"+44{phone}"
             
-        if not re.match(r'^\+44\d{9,10}, phone):
+        if not re.match(r'^\+44\d{9,10}$', phone):
             log_with_timestamp(f"❌ Invalid UK phone number format: {phone}")
             return {"success": False, "message": "Invalid UK phone number format"}
         
