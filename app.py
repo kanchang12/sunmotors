@@ -292,51 +292,85 @@ def wasteking_marketplace():
             "error": str(e)
         }), 500
 
-@app.route('/api/call-supplier', methods=['POST', 'GET'])
-def call_supplier():
-    """Mock supplier call"""
+def make_supplier_call(real_supplier_phone: str, date: str, service: str, postcode: str) -> dict:
+    """Make call to supplier - FETCH real number from SMP but CALL test number"""
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"success": False, "message": "No data provided"}), 400
-
-        service = data.get('service')
-        postcode = data.get('postcode')
-        requested_date = data.get('requested_date')
+        log_with_timestamp(f"📞 Making supplier call for {service} on {date} to {postcode}")
+        log_with_timestamp(f"📞 Real supplier from SMP: {real_supplier_phone}")
+        log_with_timestamp(f"📞 Actually calling test number: {TEST_SUPPLIER_PHONE}")
         
-        if not all([service, postcode, requested_date]):
-            return jsonify({
-                "success": False,
-                "message": "Missing required fields"
-            }), 400
-
-        # Mock response
+        # Initialize Twilio client
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        
+        # Make the call with TwiML to TEST number
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Hello, this is Waste King checking availability for {service} on {date} in {postcode}. Please confirm if you have availability. Thank you.</Say>
+    <Record maxLength="30" timeout="10" playBeep="true"/>
+    <Say voice="alice">Thank you for the information. Goodbye.</Say>
+</Response>"""
+        
+        call = client.calls.create(
+            twiml=twiml,
+            to=TEST_SUPPLIER_PHONE,  # Always call test number
+            from_=TWILIO_PHONE_NUMBER,
+            timeout=30
+        )
+        
+        log_with_timestamp(f"📞 Call initiated to test number: {call.sid}")
+        
+        # Wait for call to complete (simplified for testing)
+        time.sleep(5)
+        
+        # Simulate response parsing (in real system would analyze recording)
         availability_responses = [
-            {"available": True, "message": f"Available for {service} on {requested_date}"},
-            {"available": False, "message": f"Sorry, {requested_date} is fully booked"}
+            {"available": True, "message": f"Available for {service} on {date}"},
+            {"available": True, "message": f"Morning slot available on {date}"},
+            {"available": False, "message": f"Sorry, {date} is fully booked. Next available is tomorrow."},
+            {"available": True, "message": f"Afternoon delivery possible on {date}"}
         ]
         
         response = random.choice(availability_responses)
-        datetime_info = get_current_datetime_info()
+        response["call_sid"] = call.sid
+        response["real_supplier_from_smp"] = real_supplier_phone
+        response["test_number_called"] = TEST_SUPPLIER_PHONE
         
-        return jsonify({
-            "success": True,
-            "test_number_called": TEST_SUPPLIER_PHONE,
-            "service": service,
-            "postcode": postcode,
-            "requested_date": requested_date,
-            "available": response["available"],
-            "supplier_response": response["message"],
-            "ai_context": datetime_info
-        })
+        log_with_timestamp(f"📞 Supplier response: {response['message']}")
+        
+        # Store in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO supplier_calls 
+                (call_sid, real_supplier_phone, test_phone_used, requested_date, service_type, postcode, available, supplier_response, call_duration_seconds, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                call.sid,
+                real_supplier_phone,  # Real number from SMP
+                TEST_SUPPLIER_PHONE,  # Test number actually called
+                date,
+                service,
+                postcode,
+                response["available"],
+                response["message"],
+                5,  # Simulated call duration
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+        
+        return response
         
     except Exception as e:
         log_error("Supplier call failed", e)
-        return jsonify({
-            "success": False,
-            "message": "Supplier call failed",
-            "error": str(e)
-        }), 500
+        return {
+            "available": False,
+            "message": "Unable to reach supplier",
+            "error": str(e),
+            "real_supplier_from_smp": real_supplier_phone,
+            "test_number_called": TEST_SUPPLIER_PHONE
+        }
 
 @app.route('/api/wasteking-confirm-booking', methods=['POST', 'GET'])
 def confirm_wasteking_booking():
@@ -395,38 +429,65 @@ def confirm_wasteking_booking():
             "error": str(e)
         }), 500
 
-@app.route('/api/send-payment-sms', methods=['POST', 'GET'])
-def send_payment_sms_endpoint():
-    """Send payment SMS"""
+def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: str):
+    """Send payment SMS via Twilio with adjusted amount"""
     try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"status": "error", "message": "No data"}), 400
-
-        required_fields = ['customer_phone', 'amount']
-        missing = [f for f in required_fields if not data.get(f)]
-        if missing:
-            return jsonify({
-                "status": "error",
-                "message": f"Missing: {', '.join(missing)}"
-            }), 400
-
-        phone = data['customer_phone']
-        amount = str(data['amount'])
-        quote_id = data.get('quote_id', f"WK{random.randint(100000, 999999)}")
+        # Clean and format phone number
+        if phone.startswith('0'):
+            phone = f"+44{phone[1:]}"
+        elif phone.startswith('44'):
+            phone = f"+{phone}"
+        elif not phone.startswith('+'):
+            phone = f"+44{phone}"
+            
+        if not re.match(r'^\+44\d{9,10}$', phone):
+            log_with_timestamp(f"❌ Invalid UK phone number format: {phone}")
+            return {"success": False, "message": "Invalid UK phone number format"}
         
-        sms_response = send_payment_sms(quote_id, phone, PAYPAL_PAYMENT_LINK, amount)
+        # Create SMS message with the final adjusted amount
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        message_body = f"""Waste King Payment
+Amount: £{amount}
+Reference: {booking_ref}
 
-        return jsonify({
-            "status": "success" if sms_response.get('success') else "error",
-            "message": sms_response.get('message'),
-            "amount": f"£{amount}",
-            "quote_id": quote_id
-        })
+Pay securely: {payment_link}
 
+After payment, you'll get confirmation.
+Thank you!"""
+        
+        # Send SMS
+        message = client.messages.create(
+            body=message_body,
+            from_=TWILIO_PHONE_NUMBER,
+            to=phone
+        )
+        
+        log_with_timestamp(f"✅ SMS sent to {phone} for booking {booking_ref} with final amount £{amount}. SID: {message.sid}")
+        
+        # Store in database
+        with db_lock:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO sms_payments 
+                (quote_id, customer_phone, amount, sms_sid, created_at, paypal_link) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                booking_ref,
+                phone,
+                float(amount),  # Use the final adjusted amount
+                message.sid,
+                datetime.now().isoformat(),
+                payment_link
+            ))
+            conn.commit()
+            conn.close()
+        
+        return {"success": True, "message": "SMS sent successfully", "sms_sid": message.sid}
+        
     except Exception as e:
-        log_error("SMS failed", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        log_error("Failed to send payment SMS", e)
+        return {"success": False, "message": str(e)}
 
 @app.route('/status')
 def get_status():
