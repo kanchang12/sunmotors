@@ -498,7 +498,7 @@ def index():
         "endpoints": [
             "/api/current-datetime",
             "/api/wasteking-marketplace", 
-            "/api/check-supplier-availability",
+            "/api/call-supplier",
             "/api/wasteking-confirm-booking",
             "/api/send-payment-sms"
         ]
@@ -841,7 +841,7 @@ def send_payment_sms_endpoint():
             }
         }), 500
 
-@app.route('/api/check-supplier-availability', methods=['POST'])
+@app.route('/api/call-supplier', methods=['POST', 'GET"])
 def check_supplier_availability():
     """Make phone call to supplier - gets real number from previous marketplace call but calls test number"""
     try:
