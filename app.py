@@ -19,7 +19,7 @@ TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', 'your_twilio_token')
 TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', 'your_twilio_phone_number')
 
 # Test supplier phone
-TEST_SUPPLIER_PHONE = "+447761577001"
+TEST_SUPPLIER_PHONE = "+447823656907"
 
 # PayPal fallback
 PAYPAL_PAYMENT_LINK = "https://www.paypal.com/ncp/payment/BQ82GUU9VSKYN"
@@ -174,7 +174,7 @@ def send_payment_sms(booking_ref, phone, payment_link, amount):
         
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         message_body = f"""Waste King Payment
-Amount: £{amount}
+Amount: {amount}
 Reference: {booking_ref}
 
 Pay securely: {payment_link}
