@@ -217,7 +217,7 @@ def index():
         "twilio_available": twilio_available,
         "endpoints": [
             "/api/current-datetime",
-            "/api/wasteking-marketplace", 
+            "/api/wasteking-get-price", 
             "/api/call-supplier",
             "/api/wasteking-confirm-booking",
             "/api/send-payment-sms"
@@ -229,7 +229,7 @@ def get_current_datetime():
     """Get current date/time"""
     return jsonify(get_current_datetime_info())
 
-@app.route('/api/wasteking-marketplace', methods=['POST'])
+@app.route('/api/wasteking-get-price', methods=['POST'])
 def wasteking_marketplace():
     """Get pricing and supplier info"""
     try:
