@@ -892,14 +892,16 @@ def send_payment_sms(booking_ref: str, phone: str, payment_link: str, amount: st
         
         # Create SMS message
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        message_body = f"""Waste King Payment
-Amount: £{amount}
-Reference: {booking_ref}
-
-Pay securely: {payment_link}
-
-After payment, you'll get confirmation.
-Thank you!"""
+        message_body = f"""
+        Thank You for Choosing Waste King 🌱
+ 
+Please click the secure link below to complete your payment: {payment_link}
+ 
+As part of our service, you'll receive digital waste transfer notes for your records. We're also proud to be planting trees every week to offset our carbon footprint. If you were happy with our service, we'd really appreciate it if you could leave us a review at https://uk.trustpilot.com/review/wastekingrubbishclearance.com. Find out more about us at www.wastekingrubbishclearance.co.uk.
+ 
+Best regards,
+The Waste King Team
+"""
         
         # Send SMS
         message = client.messages.create(
