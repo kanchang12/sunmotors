@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 WasteKing Simple Pricing & Booking API
-Simplified version that handles price check and booking creation
+Two-step process: Price check + Booking creation with payment link
 """
 
 import os
@@ -162,7 +162,7 @@ def get_price():
             "success": True,
             "booking_ref": booking_ref,
             "price": price,
-            "message": f"The price is £{price} including VAT",
+            "message": f"The price is £{price} plus VAT",
             **datetime_info
         })
 
@@ -176,7 +176,7 @@ def get_price():
 
 @app.route('/api/create-booking', methods=['POST'])
 def create_booking():
-    """Create booking with payment link - Step 2"""
+    """Create booking with payment link - Step 2 - Returns payment link to AI"""
     try:
         log_with_timestamp("=" * 50)
         log_with_timestamp("📝 BOOKING CREATION STARTED")
@@ -253,149 +253,26 @@ def create_booking():
         price = payment_response['quote'].get('price', '0')
         datetime_info = get_current_datetime_info()
 
-        log_with_timestamp(f"✅ Booking created with payment link")
+        log_with_timestamp(f"✅ Booking created with payment link: {payment_link}")
 
+        # Return payment link directly to AI
         return jsonify({
             "success": True,
-            "message": "Booking created successfully",
+            "message": "Booking created successfully. Payment link ready.",
             "booking_ref": booking_ref,
             "payment_link": payment_link,
             "price": price,
-            "customer_phone": data['customer_phone'],
-            **datetime_info
-        })
-
-    except Exception as e:
-        log_with_timestamp(f"❌ Booking creation error: {str(e)}")
-        return jsonify({
-            "success": False,
-            "message": "Failed to create booking",
-            "error": str(e)
-        }), 500
-
-@app.route('/api/full-booking-flow', methods=['POST'])
-def full_booking_flow():
-    """Complete flow: Price check + Booking creation in one call"""
-    try:
-        log_with_timestamp("=" * 60)
-        log_with_timestamp("🚀 FULL BOOKING FLOW STARTED")
-        
-        data = request.get_json()
-        if not data:
-            return jsonify({
-                "success": False,
-                "message": "No data provided"
-            }), 400
-
-        # Validate required fields for pricing
-        pricing_required = ['postcode', 'service', 'type']
-        missing = [field for field in pricing_required if not data.get(field)]
-        if missing:
-            return jsonify({
-                "success": False,
-                "message": f"Missing pricing fields: {', '.join(missing)}"
-            }), 400
-
-        # Validate required fields for booking
-        booking_required = ['customer_phone']
-        missing_booking = [field for field in booking_required if not data.get(field)]
-        if missing_booking:
-            return jsonify({
-                "success": False,
-                "message": f"Missing booking fields: {', '.join(missing_booking)}"
-            }), 400
-
-        log_with_timestamp(f"📦 Full flow request: {data['postcode']}, {data['service']}, {data['type']}")
-
-        # STEP 1: Create booking reference
-        booking_ref = create_wasteking_booking()
-        if not booking_ref:
-            return jsonify({
-                "success": False,
-                "message": "Service unavailable"
-            }), 503
-
-        # STEP 2: Get pricing
-        search_payload = {
-            "search": {
-                "postCode": data['postcode'],
-                "service": data['service'],
-                "type": data['type']
-            }
-        }
-        
-        price_data = update_wasteking_booking(booking_ref, search_payload)
-        if not price_data or not price_data.get('quote'):
-            return jsonify({
-                "success": False,
-                "message": "No pricing available for this location"
-            }), 404
-
-        price = price_data['quote'].get('price')
-        log_with_timestamp(f"💰 Price obtained: £{price}")
-
-        # STEP 3: Add customer details (if provided)
-        if data.get('first_name') and data.get('last_name'):
-            customer_payload = {
-                "customer": {
-                    "firstName": data['first_name'],
-                    "lastName": data['last_name'],
-                    "phone": data['customer_phone'],
-                    "emailAddress": data.get('email', ''),
-                    "addressPostcode": data['postcode']
-                }
-            }
-            log_with_timestamp("👤 Adding customer details...")
-            update_wasteking_booking(booking_ref, customer_payload)
-
-        # STEP 4: Add service details (if provided)
-        if data.get('service_date'):
-            service_payload = {
-                "service": {
-                    "date": data['service_date'],
-                    "time": data.get('service_time', 'am'),
-                    "placement": data.get('placement', 'drive')
-                }
-            }
-            log_with_timestamp("📅 Adding service details...")
-            update_wasteking_booking(booking_ref, service_payload)
-
-        # STEP 5: Generate payment link
-        payment_payload = {
-            "action": "quote",
-            "postPaymentUrl": "https://wasteking.co.uk/thank-you/"
-        }
-        log_with_timestamp("💳 Generating payment link...")
-        payment_response = update_wasteking_booking(booking_ref, payment_payload)
-        if not payment_response or not payment_response.get('quote', {}).get('paymentLink'):
-            return jsonify({
-                "success": False,
-                "message": "Failed to generate payment link"
-            }), 500
-
-        payment_link = payment_response['quote']['paymentLink']
-        final_price = payment_response['quote'].get('price', price)
-        datetime_info = get_current_datetime_info()
-
-        log_with_timestamp(f"✅ FULL FLOW COMPLETE - Booking: {booking_ref}, Price: £{final_price}")
-
-        return jsonify({
-            "success": True,
-            "message": f"Booking complete! Price: £{final_price}",
-            "booking_ref": booking_ref,
-            "price": final_price,
-            "payment_link": payment_link,
             "customer_phone": data['customer_phone'],
             "customer_name": f"{data.get('first_name', 'Customer')} {data.get('last_name', 'Unknown')}",
             **datetime_info
         })
 
     except Exception as e:
-        log_with_timestamp(f"❌ Full booking flow error: {str(e)}")
+        log_with_timestamp(f"❌ Booking creation error: {str(e)}")
         log_with_timestamp(traceback.format_exc())
         return jsonify({
             "success": False,
-            "message": "System error during booking",
+            "message": "Failed to create booking",
             "error": str(e)
         }), 500
 
@@ -407,8 +284,7 @@ def health_check():
         "timestamp": datetime.now().isoformat(),
         "endpoints": [
             "/api/get-price",
-            "/api/create-booking", 
-            "/api/full-booking-flow"
+            "/api/create-booking"
         ]
     })
 
@@ -416,9 +292,8 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🚀 WasteKing Simple API Starting...")
     print("📋 Available endpoints:")
-    print("   POST /api/get-price        - Get price only")
-    print("   POST /api/create-booking   - Create booking with payment link")
-    print("   POST /api/full-booking-flow - Complete price + booking flow")
+    print("   POST /api/get-price        - Get price and booking_ref")
+    print("   POST /api/create-booking   - Create booking and return payment link")
     print("   GET  /health               - Health check")
     print("=" * 60)
     
