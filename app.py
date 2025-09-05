@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WasteKing Simple Pricing & Booking API
+WasteKing Simple Pricing & Booking API - FIXED VERSION
 Two-step process: Price check + Booking creation with payment link
 """
 
@@ -8,6 +8,7 @@ import os
 import requests
 import json
 import traceback
+import time
 from datetime import datetime, timezone, timedelta
 from flask import Flask, request, jsonify
 
@@ -44,7 +45,7 @@ def create_wasteking_booking():
             log_with_timestamp(f"✅ Created WasteKing booking reference: {booking_ref}")
             return booking_ref
         else:
-            log_with_timestamp(f"❌ Failed to create booking. Status: {response.status_code}")
+            log_with_timestamp(f"❌ Failed to create booking. Status: {response.status_code}, Response: {response.text}")
             return None
             
     except Exception as e:
@@ -67,6 +68,10 @@ def update_wasteking_booking(booking_ref: str, update_data: dict):
         payload.update(update_data)
         
         update_url = f"{WASTEKING_BASE_URL}api/booking/update/"
+        
+        # Log the request for debugging
+        log_with_timestamp(f"🔄 Updating booking {booking_ref} with: {json.dumps(update_data, indent=2)}")
+        
         response = requests.post(
             update_url,
             headers=headers,
@@ -79,7 +84,7 @@ def update_wasteking_booking(booking_ref: str, update_data: dict):
             log_with_timestamp(f"✅ Updated booking {booking_ref}")
             return response.json()
         else:
-            log_with_timestamp(f"❌ Failed to update booking {booking_ref}. Status: {response.status_code}")
+            log_with_timestamp(f"❌ Failed to update booking {booking_ref}. Status: {response.status_code}, Response: {response.text}")
             return None
             
     except Exception as e:
@@ -90,17 +95,49 @@ def get_current_datetime_info():
     """Get current UK date/time information for AI context"""
     now_utc = datetime.now(timezone.utc)
     
+    # UK timezone: GMT (UTC+0) in winter, BST (UTC+1) in summer
+    # Simple approximation: BST from last Sunday in March to last Sunday in October
+    year = now_utc.year
+    
+    # Find last Sunday in March (BST starts)
+    march_last_sunday = datetime(year, 3, 31, tzinfo=timezone.utc)
+    while march_last_sunday.weekday() != 6:  # 6 = Sunday
+        march_last_sunday -= timedelta(days=1)
+    march_last_sunday = march_last_sunday.replace(hour=1)  # 1 AM UTC
+    
+    # Find last Sunday in October (GMT starts)
+    oct_last_sunday = datetime(year, 10, 31, tzinfo=timezone.utc)
+    while oct_last_sunday.weekday() != 6:  # 6 = Sunday
+        oct_last_sunday -= timedelta(days=1)
+    oct_last_sunday = oct_last_sunday.replace(hour=2)  # 2 AM UTC
+    
+    # Determine if we're in BST (British Summer Time) or GMT
+    if march_last_sunday <= now_utc < oct_last_sunday:
+        # BST: UTC+1
+        uk_offset = timedelta(hours=1)
+        timezone_name = "BST"
+    else:
+        # GMT: UTC+0
+        uk_offset = timedelta(hours=0)
+        timezone_name = "GMT"
+    
+    now_uk = now_utc + uk_offset
+    
     return {
-        "current_date": now_utc.strftime("%Y-%m-%d"),
-        "current_time": now_utc.strftime("%H:%M"),
-        "current_day": now_utc.strftime("%A"),
-        "tomorrow_date": (now_utc + timedelta(days=1)).strftime("%Y-%m-%d"),
+        "current_date": now_uk.strftime("%Y-%m-%d"),
+        "current_time": now_uk.strftime("%H:%M"),
+        "current_day": now_uk.strftime("%A"),
+        "tomorrow_date": (now_uk + timedelta(days=1)).strftime("%Y-%m-%d"),
         "current_datetime_utc": now_utc.isoformat(),
+        "current_datetime_uk": now_uk.strftime("%Y-%m-%d %H:%M:%S"),
+        "uk_timezone": timezone_name,
         "ai_context": {
-            "today_is": now_utc.strftime("%Y-%m-%d"),
-            "current_time": now_utc.strftime("%H:%M"),
-            "tomorrow_is": (now_utc + timedelta(days=1)).strftime("%Y-%m-%d"),
-            "current_day": now_utc.strftime("%A")
+            "today_is": now_uk.strftime("%Y-%m-%d"),
+            "current_time": now_uk.strftime("%H:%M"),
+            "tomorrow_is": (now_uk + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "current_day": now_uk.strftime("%A"),
+            "timezone": timezone_name,
+            "local_london_time": now_uk.strftime("%H:%M")
         }
     }
 
@@ -137,7 +174,7 @@ def get_price():
                 "message": "Service unavailable"
             }), 503
 
-        # Get pricing
+        # Get pricing - CRITICAL: This must be the first update
         search_payload = {
             "search": {
                 "postCode": data['postcode'],
@@ -176,7 +213,7 @@ def get_price():
 
 @app.route('/api/create-booking', methods=['POST'])
 def create_booking():
-    """Create booking with payment link - Step 2 - Returns payment link to AI"""
+    """Create booking with payment link - Step 2 - FIXED SEQUENCE"""
     try:
         log_with_timestamp("=" * 50)
         log_with_timestamp("📝 BOOKING CREATION STARTED")
@@ -188,27 +225,105 @@ def create_booking():
                 "message": "No data provided"
             }), 400
 
-        # Validate required fields
+        # Handle flexible field mapping - support different field names
+        normalized_data = {}
+        
+        # Handle booking_ref - create one if missing AND do price search
+        normalized_data['booking_ref'] = data.get('booking_ref')
+        if not normalized_data['booking_ref']:
+            log_with_timestamp("🆔 No booking_ref provided, creating new booking...")
+            
+            # Validate we have required fields for new booking
+            required_for_new = ['postcode', 'service', 'type']
+            missing = [field for field in required_for_new if not data.get(field)]
+            if missing:
+                return jsonify({
+                    "success": False,
+                    "message": f"Missing required fields for new booking: {', '.join(missing)}"
+                }), 400
+            
+            # Create new booking
+            booking_ref = create_wasteking_booking()
+            if not booking_ref:
+                return jsonify({"success": False, "message": "Failed to create booking reference"}), 500
+            normalized_data['booking_ref'] = booking_ref
+            log_with_timestamp(f"✅ Created new booking_ref: {booking_ref}")
+            
+            # CRITICAL: Do price search FIRST for new bookings
+            search_payload = {
+                "search": {
+                    "postCode": data['postcode'],
+                    "service": data['service'],
+                    "type": data['type']
+                }
+            }
+            log_with_timestamp("🔍 REQUIRED: Doing price search first for new booking")
+            price_response = update_wasteking_booking(booking_ref, search_payload)
+            if not price_response:
+                return jsonify({"success": False, "message": "Failed to get pricing for new booking"}), 500
+            log_with_timestamp(f"💰 Price search complete: £{price_response.get('quote', {}).get('price', 'N/A')}")
+            
+            # Small delay to let the API process the price search
+            time.sleep(1)
+        
+        # Handle customer phone - flexible field names
+        normalized_data['customer_phone'] = (
+            data.get('customer_phone') or 
+            data.get('phone') or 
+            data.get('customerPhone') or
+            data.get('Phone')
+        )
+        
+        # Handle names - flexible field names
+        normalized_data['first_name'] = (
+            data.get('first_name') or 
+            data.get('firstName') or 
+            data.get('firstname') or
+            data.get('name', '').split(' ')[0] if data.get('name') else None
+        )
+        
+        normalized_data['last_name'] = (
+            data.get('last_name') or 
+            data.get('lastName') or 
+            data.get('lastname') or
+            ' '.join(data.get('name', '').split(' ')[1:]) if data.get('name') and len(data.get('name', '').split(' ')) > 1 else None
+        )
+        
+        # Handle service date - flexible field names
+        normalized_data['service_date'] = (
+            data.get('service_date') or 
+            data.get('date') or 
+            data.get('serviceDate') or
+            data.get('delivery_date')
+        )
+        
+        # Handle other optional fields
+        normalized_data['service_time'] = data.get('service_time', data.get('time', 'am'))
+        normalized_data['email'] = data.get('email', data.get('emailAddress', ''))
+        normalized_data['postcode'] = data.get('postcode', data.get('postCode', ''))
+        normalized_data['placement'] = data.get('placement', 'drive')
+
+        # Validate minimum required fields
         required = ['booking_ref', 'customer_phone']
-        missing = [field for field in required if not data.get(field)]
+        missing = [field for field in required if not normalized_data.get(field)]
         if missing:
             return jsonify({
                 "success": False,
                 "message": f"Missing required fields: {', '.join(missing)}"
             }), 400
 
-        booking_ref = data['booking_ref']
+        booking_ref = normalized_data['booking_ref']
         log_with_timestamp(f"🔍 Processing booking: {booking_ref}")
 
         # Step 1: Add customer details (if provided)
-        if data.get('first_name') and data.get('last_name'):
+        if normalized_data.get('first_name') and normalized_data.get('last_name'):
             customer_payload = {
                 "customer": {
-                    "firstName": data['first_name'],
-                    "lastName": data['last_name'],
-                    "phone": data['customer_phone'],
-                    "emailAddress": data.get('email', ''),
-                    "addressPostcode": data.get('postcode', '')
+                    "firstName": normalized_data['first_name'],
+                    "lastName": normalized_data['last_name'],
+                    "phone": normalized_data['customer_phone'],
+                    "emailAddress": normalized_data.get('email', ''),
+                    "addressPostcode": normalized_data.get('postcode', '')
                 }
             }
             log_with_timestamp("👤 Adding customer details...")
@@ -218,14 +333,17 @@ def create_booking():
                     "success": False,
                     "message": "Failed to add customer details"
                 }), 500
+            
+            # Small delay between API calls to prevent race conditions
+            time.sleep(0.5)
 
         # Step 2: Add service details (if provided)
-        if data.get('service_date'):
+        if normalized_data.get('service_date'):
             service_payload = {
                 "service": {
-                    "date": data['service_date'],
-                    "time": data.get('service_time', 'am'),
-                    "placement": data.get('placement', 'drive')
+                    "date": normalized_data['service_date'],
+                    "time": normalized_data.get('service_time', 'am'),
+                    "placement": normalized_data.get('placement', 'drive')
                 }
             }
             log_with_timestamp("📅 Adding service details...")
@@ -235,6 +353,9 @@ def create_booking():
                     "success": False,
                     "message": "Failed to add service details"
                 }), 500
+            
+            # Small delay between API calls
+            time.sleep(0.5)
 
         # Step 3: Generate payment link
         payment_payload = {
@@ -262,8 +383,8 @@ def create_booking():
             "booking_ref": booking_ref,
             "payment_link": payment_link,
             "price": price,
-            "customer_phone": data['customer_phone'],
-            "customer_name": f"{data.get('first_name', 'Customer')} {data.get('last_name', 'Unknown')}",
+            "customer_phone": normalized_data['customer_phone'],
+            "customer_name": f"{normalized_data.get('first_name', 'Customer')} {normalized_data.get('last_name', 'Unknown')}",
             **datetime_info
         })
 
